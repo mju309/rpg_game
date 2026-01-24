@@ -1,0 +1,43 @@
+{
+    "player": {
+        "name": "dfs",
+        "level": 1,
+        "exp": 0,
+        "gold": 200,
+        "job": "초보자",
+        "stats": {
+            "hp": 100,
+            "atk": 10,
+            "def": 10,
+            "mana": 50,
+            "agi": 10,
+            "crit": 10
+        },
+        "stat_points": 0,
+        "skill_points": 0
+    },
+    "inventory": [],
+    "equipment": {
+        "weapon": null,
+        "armor": null,
+        "accessory": null
+    },
+    "world": {
+        "map_index": 0,
+        "player_pos": [
+            400,
+            520
+        ]
+    },
+    "companions": {
+        "owned": [],
+        "party_indices": []
+    },
+    "quests": {
+        "main_quest_id": 1,
+        "completed_quests": [],
+        "active_quests": {},
+        "allow_sub_quests": false
+    },
+    "save_time": 5073
+}

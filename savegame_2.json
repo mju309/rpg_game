@@ -1,0 +1,43 @@
+{
+    "player": {
+        "name": "asdf",
+        "level": 100,
+        "exp": 0,
+        "gold": 200,
+        "job": "초보자",
+        "stats": {
+            "hp": 10000000000000000000000000000000000000000000000000000000000000000000000,
+            "atk": 100000000000000000000000000000000000000000000000000000000000000000000,
+            "def": -1000000000000000000000000000000000000000000000000000000000000000000000,
+            "mana": -1000000000000000000000000,
+            "agi": -100000000000000000,
+            "crit": -1000000000000000000000000
+        },
+        "stat_points": 300,
+        "skill_points": 0
+    },
+    "inventory": [],
+    "equipment": {
+        "weapon": null,
+        "armor": null,
+        "accessory": null
+    },
+    "world": {
+        "map_index": 0,
+        "player_pos": [
+            400,
+            200
+        ]
+    },
+    "companions": {
+        "owned": [],
+        "party_indices": []
+    },
+    "quests": {
+        "main_quest_id": 22,
+        "completed_quests": [],
+        "active_quests": {},
+        "allow_sub_quests": false
+    },
+    "save_time": 11976
+}

@@ -3,6 +3,10 @@ import random
 import string
 import sys
 import os
+import json
+from quest_data import QUEST_DB
+from quest import QuestManager
+import math # math 모듈 추가
 
 pygame.init()
 
@@ -111,6 +115,7 @@ MAP_DATA = [
     {"name": "심연의 동굴", "min_lv": 40, "color": (50, 0, 50)},
     {"name": "바람의 평원", "min_lv": 50, "color": (100, 200, 100)},
     {"name": "황혼의 유적", "min_lv": 60, "color": (100, 100, 80)},
+    {"name": "마왕성", "min_lv": 90, "color": (30, 0, 0)}, # 최종 지역
 ]
 
 # 몬스터 데이터 베이스 (map_idx: 등장 맵 인덱스)
@@ -190,13 +195,14 @@ monster_kills = {"goblin": 0, "orc": 0, "king_slime": 0}
 
 # 보서 데이터 베이스
 BOSS_DB = {
-    0: {"name": "킹 슬라임", "hp": 500, "atk": 25, "def": 15, "agi": 10, "exp": 200, "patterns": ["점프 프레스", "자가 회복"]},
-    1: {"name": "고대 설괴", "hp": 1200, "atk": 45, "def": 30, "agi": 15, "exp": 600, "patterns": ["눈보라", "얼음 방벽"]},
-    2: {"name": "데저트 드래곤", "hp": 2500, "atk": 70, "def": 45, "agi": 25, "exp": 1500, "patterns": ["화염 숨결", "모래 폭풍"]},
-    3: {"name": "맹독 히드라", "hp": 4000, "atk": 90, "def": 50, "agi": 30, "exp": 2500, "patterns": ["맹독 브레스", "트리플 바이트"]},
-    4: {"name": "심해의 크라켄", "hp": 6000, "atk": 110, "def": 70, "agi": 20, "exp": 3500, "patterns": ["먹물 발사", "촉수 휩쓸기"]},
-    5: {"name": "지옥의 켈베로스", "hp": 10000, "atk": 160, "def": 40, "agi": 50, "exp": 6000, "patterns": ["삼연격 지옥화염", "광폭화"]},
-    6: {"name": "심연의 수호자", "hp": 15000, "atk": 200, "def": 120, "agi": 40, "exp": 10000, "patterns": ["어둠의 고리", "멸망의 주문"]},
+    0: {"name": "킹 슬라임", "hp": 500, "atk": 25, "def": 15, "agi": 10, "crit": 5, "exp": 200, "patterns": ["점프 프레스", "자가 회복"]},
+    1: {"name": "고대 설괴", "hp": 1200, "atk": 45, "def": 30, "agi": 15, "crit": 8, "exp": 600, "patterns": ["눈보라", "얼음 방벽"]},
+    2: {"name": "데저트 드래곤", "hp": 2500, "atk": 70, "def": 45, "agi": 25, "crit": 12, "exp": 1500, "patterns": ["화염 숨결", "모래 폭풍"]},
+    3: {"name": "맹독 히드라", "hp": 4000, "atk": 90, "def": 50, "agi": 30, "crit": 10, "exp": 2500, "patterns": ["맹독 브레스", "트리플 바이트"]},
+    4: {"name": "심해의 크라켄", "hp": 6000, "atk": 110, "def": 70, "agi": 20, "crit": 15, "exp": 3500, "patterns": ["먹물 발사", "촉수 휩쓸기"]},
+    5: {"name": "지옥의 켈베로스", "hp": 10000, "atk": 160, "def": 40, "agi": 50, "crit": 20, "exp": 6000, "patterns": ["삼연격 지옥화염", "광폭화"]},
+    6: {"name": "심연의 수호자", "hp": 15000, "atk": 200, "def": 120, "agi": 40, "crit": 25, "exp": 10000, "patterns": ["어둠의 고리", "멸망의 주문"]},
+    7: {"name": "마왕", "hp": 50000, "atk": 450, "def": 200, "agi": 60, "crit": 35, "exp": 0, "patterns": ["심연의 불꽃", "차원 붕괴", "종말의 예고"], "is_last": True},
 }
 
 # 게임 상태
@@ -214,8 +220,18 @@ STATE_SETTINGS = "settings"
 STATE_BLACKSMITH = "blacksmith"
 STATE_RECRUIT = "recruit"
 STATE_PARTY = "party"
+STATE_QUEST_LOG = "quest_log"
+STATE_ENDING = "ending" # 엔딩 화면 추가
+STATE_SAVE_LOAD = "save_load" # 세이브/로드 선택 화면
+STATE_TITLE = "title" # 타이틀 화면
+STATE_ESC_MENU = "esc_menu" # ESC 메뉴
+STATE_HIDDEN_JOB = "hidden_job" # AI 히든 직업 결정 화면
 
-state = STATE_NAME
+# 전투 시퀀스 전술 단계
+BATTLE_STEP_CRITICAL = 100 # 크리티컬 바 단계
+BATTLE_STEP_DEATH = 200 # 사망 연출 단계
+
+state = STATE_TITLE
 dialog_page = 0
 quest_text = ""
 player_name = ""
@@ -237,9 +253,36 @@ KEY_ESC = pygame.K_ESCAPE # 설정 메뉴
 player_speed = 4
 current_map_index = 0
 select_map_index = 0
+quest_btn_rect = pygame.Rect(10, 10, 130, 40)
+quest_log_scroll = 0
+state_before_quest_log = STATE_TOWN
+state_before_levelup = STATE_TOWN
+state_before_save_load = STATE_TOWN
+save_load_mode = "save" # "save" 또는 "load"
+save_slot_index = 0
+title_select_idx = 0 # 타이틀 메뉴 선택 인덱스
+esc_menu_idx = 0 # ESC 메뉴 선택 인덱스
+state_before_settings = STATE_TOWN # 설정 전 상태 저장용
+state_before_esc = STATE_TITLE # ESC 메뉴 진입 전 상태 저장용
+
+# 소울 싱크로나이즈 (크리티컬 시스템) 관련 변수
+crit_ring_radius = 200 # 시작 반경
+crit_target_radius = 40 # 목표 반경 (중앙 코어 크기)
+crit_ring_speed = 6 # 축소 속도
+crit_result = None
+crit_multiplier = 1.0
+
+damage_labels = []
+particles = [] # 이펙트 파티클 리스트
+
+# 연출 효과 변수
+screen_shake_time = 0
+screen_shake_intensity = 0
+hit_flash_time = 0
+hit_flash_color = WHITE
 
 # 상점 및 인벤토리
-player_gold = 0
+player_gold = 200
 player_inventory = [] # {"name": "...", "type": "...", "stat": ...}
 player_equipment = {"weapon": None, "armor": None, "accessory": None}
 player_party = [] # 동료 목록
@@ -292,7 +335,7 @@ ITEM_DB = {
 
 
 # 플레이어
-player_size = 40
+player_size = 40 # 기본 논리 사이즈
 player_start_pos = (400, 520) # 남쪽 도로 입구
 player_town_pos = (400, 520)
 player_field_pos = (600, HEIGHT - 80)
@@ -301,7 +344,8 @@ player_level = 1
 player_exp = 0
 player_move_timer = 0
 PLAYER_MOVE_INTERVAL = 150 # 그리드 이동 딜레이
-player_speed = player_size # 한 칸씩 이동
+player_speed = 40 # 이동 거리
+player_facing = "right" # 캐릭터가 보는 방향
 
 STAT_CONFIG = {
     "hp": {"label": "체력", "base": 100, "max": 1000, "increment": 10},
@@ -431,11 +475,222 @@ npc_blacksmith = pygame.Rect(640, 480, 40, 40) # 대장장이 (우하단 구역)
 npc_recruit = pygame.Rect(520, 480, 40, 40) # 용병단장 (우하단 구역)
 npc_guard = pygame.Rect(280, 80, 40, 40)  # 경비병 (북쪽 입구 근처)
 
+# ----------------------------------------
+# 이미지 스프라이트 설정 (40x40)
+# ----------------------------------------
+# 아래 파일들을 프로젝트 폴더에 넣으면 자동으로 적용됩니다.
+# - player.png, chief.png, job.png, store.png, blacksmith.png, guard.png, recruit.png
+# - slime.png, mushroom.png, goblin.png 등
+SPRITES = {}
+
+def load_sprite(name, filename, color_fallback):
+    path = os.path.join(os.getcwd(), filename)
+    if os.path.exists(path):
+        try:
+            img = pygame.image.load(path).convert_alpha()
+            SPRITES[name] = pygame.transform.scale(img, (80, 80))
+            return True
+        except: pass
+    # 파일이 없거나 로드 실패 시 색상 정보 저장
+    SPRITES[name] = color_fallback
+    return False
+
+# 초기 이미지 로드 (파일이 없으면 설정된 색깔로 대체됨)
+load_sprite("player", "player.png", BLUE)
+load_sprite("chief", "chief.png", GREEN)
+load_sprite("job", "job.png", (150, 0, 150))
+load_sprite("store", "store.png", (200, 200, 0))
+load_sprite("blacksmith", "blacksmith.png", (60, 60, 65))
+load_sprite("guard", "guard.png", (50, 50, 200))
+load_sprite("recruit", "recruit.png", (100, 50, 150))
+
+# 몬스터 스프라이트 (이미지 파일 없을 때의 기본 색상)
+load_sprite("slime", "slime.png", (0, 255, 150))
+load_sprite("mushroom", "mushroom.png", (255, 100, 100))
+load_sprite("goblin", "goblin.png", (50, 150, 50))
+load_sprite("demon_king", "demon_king.png", (100, 0, 100)) # 마왕
+
+def draw_sprite(screen, name, rect, facing="right"):
+    sprite = SPRITES.get(name)
+    if isinstance(sprite, pygame.Surface):
+        # 이미지 파일이 있는 경우 2배(80x80)로 출력, 논리적 Rect 중앙에 배치
+        # logic rect is offset by -20, -20 to center the 80x80 visual
+        draw_surf = sprite
+        if facing == "left":
+            draw_surf = pygame.transform.flip(sprite, True, False)
+        
+        screen.blit(draw_surf, (rect.x - 20, rect.y - 20))
+    else:
+        # Fallback: 원래 사이즈(40x40) 사각형
+        pygame.draw.rect(screen, sprite if sprite else WHITE, rect)
+
 # 퀘스트 및 대화
-quest_step = 0  # 0:시작전, 1:퀘스트수락, 2:목표달성, 3:완료
+# 퀘스트 관리자 인스턴스 생성
+quest_manager = QuestManager()
+
+class AnalyticsManager:
+    def __init__(self):
+        self.data = {
+            "skill_type_counts": {"physical": 0, "magic": 0, "buff": 0, "utility": 0},
+            "total_turns": 0,
+            "total_battles": 0,
+            "flee_count": 0,
+            "death_count": 0,
+            "low_hp_attack_count": 0, # HP 20% 이하 공격
+            "high_lv_challenge_count": 0, # 본인보다 높은 렙 지역 전투
+            "potion_emergency": 0, # 20% 미만 사용
+            "potion_habitual": 0,  # 70% 이상 사용
+            "blacksmith_attempts": 0,
+            "companion_skill_usage": 0,
+            "perfect_hits": 0,
+            "miss_hits": 0,
+            "last_death_time": 0,
+            "retry_speed_sum": 0, # 사망 후 복귀 시간 합산
+            "retry_count": 0
+        }
+
+    def log(self, category, key, value=1):
+        if category in self.data:
+            if isinstance(self.data[category], dict):
+                self.data[category][key] = self.data[category].get(key, 0) + value
+            else:
+                 # category 자체가 key인 경우 (단순 필드)
+                 pass 
+        if key in self.data:
+            self.data[key] += value
+
+    def get_state(self):
+        return self.data
+
+    def load_state(self, state_data):
+        if state_data:
+            self.data.update(state_data)
+
+analytics = AnalyticsManager()
+
+def save_game(slot):
+    global player_name, player_level, player_exp, player_gold, player_job, player_stats
+    global player_inventory, player_equipment, player_stat_points, skill_points
+    global current_map_index, owned_companions, player_party, quest_manager
+
+    party_indices = []
+    for member in player_party:
+        found = False
+        for i, owned in enumerate(owned_companions):
+            if member is owned:
+                party_indices.append(i); found = True; break
+        if not found:
+             for i, owned in enumerate(owned_companions):
+                if member['name'] == owned['name']:
+                    party_indices.append(i); break
+
+    save_data = {
+        "player": {
+            "name": player_name, "level": player_level, "exp": player_exp,
+            "gold": player_gold, "job": player_job, "stats": player_stats,
+            "stat_points": player_stat_points, "skill_points": skill_points
+        },
+        "inventory": player_inventory,
+        "equipment": player_equipment,
+        "world": { "map_index": current_map_index, "player_pos": (player.x, player.y) },
+        "companions": { "owned": owned_companions, "party_indices": party_indices },
+        "quests": quest_manager.get_state(),
+        "analytics": analytics.get_state(),
+        "save_time": pygame.time.get_ticks() 
+    }
+
+    try:
+        filename = f"savegame_{slot}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception as e:
+        print(f"저장 오류: {e}")
+        return False
+
+def load_game(slot):
+    global player_name, player_level, player_exp, player_gold, player_job, player_stats
+    global player_inventory, player_equipment, player_stat_points, skill_points
+    global current_map_index, owned_companions, player_party, quest_manager, state, player
+
+    filename = f"savegame_{slot}.json"
+    if not os.path.exists(filename):
+        return False
+
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            save_data = json.load(f)
+
+        p = save_data["player"]
+        player_name = p["name"]
+        player_level = p["level"]
+        player_exp = p["exp"]
+        player_gold = p["gold"]
+        player_job = p["job"]
+        player_stats = p["stats"]
+        player_stat_points = p.get("stat_points", 0)
+        skill_points = p.get("skill_points", 0)
+
+        player_inventory = save_data["inventory"]
+        player_equipment = save_data["equipment"]
+        
+        current_map_index = save_data["world"]["map_index"]
+        pos = save_data["world"].get("player_pos", player_start_pos)
+        player.x, player.y = pos
+
+        c = save_data["companions"]
+        owned_companions[:] = c["owned"]
+        player_party[:] = []
+        for idx in c["party_indices"]:
+            if idx < len(owned_companions):
+                player_party.append(owned_companions[idx])
+
+        quest_manager.load_state(save_data["quests"])
+        
+        # 분석 정보 복구
+        if "analytics" in save_data:
+            analytics.load_state(save_data["analytics"])
+        
+        for k, d in COMPANION_DB.items():
+            if 'desc' in d:
+                d['desc'] = d['desc'].replace("주인공", player_name).replace("플레이어", player_name)
+        
+        return True
+    except Exception as e:
+        print(f"불러오기 오류: {e}")
+        return False
+
+def get_slot_info(slot):
+    filename = f"savegame_{slot}.json"
+    if not os.path.exists(filename):
+        return "비어 있음"
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            p = data["player"]
+            return f"Lv.{p['level']} {p['name']} ({p['job']})"
+    except:
+        return "데이터 손상"
+
+# 저장 메시지 관리
+save_msg_timer = 0
+save_msg_text = ""
+def trigger_save(slot):
+    global save_msg_timer, save_msg_text
+    if save_game(slot):
+        save_msg_text = f"{slot}번 슬롯에 저장되었습니다!"
+    else:
+        save_msg_text = "저장 실패!"
+    save_msg_timer = pygame.time.get_ticks()
+# 초기 퀘스트(1번) 강제 시작 제거 (대화로 시작)
+# quest_manager.start_quest(1) 
+
+current_dialog = []
+
 current_dialog = []
 
 dialog_map = {
+    # 퀘스트 대화는 별도 관리 예정
     0: [
         "반갑네, {name}.",
         "숲 속에 슬라임이 나타났다네.",
@@ -525,11 +780,154 @@ def draw_text(text, x, y, color=WHITE, center=False, small=False):
     else:
         screen.blit(img, (x, y))
 
+def draw_soul_sync():
+    global crit_ring_radius, crit_ring_speed, crit_target_radius
+    
+    # 화면 중앙
+    cx, cy = WIDTH//2, HEIGHT//2 - 50
+    
+    # 1. 중앙 가이드 라인 (타겟 코어)
+    pygame.draw.circle(screen, (60, 60, 60), (cx, cy), crit_target_radius + 15, 2) # Outer Guide
+    pygame.draw.circle(screen, YELLOW, (cx, cy), crit_target_radius, 3) # Perfect Core
+    
+    # 2. 수축하는 링 (Soul Ring)
+    # 시간에 따라 반경 감소
+    crit_ring_radius -= crit_ring_speed
+    
+    # 링이 코어보다 작아지면 다시 크게 (실패 방지 루프 - 실제로는 도중에 누름)
+    if crit_ring_radius < 10:
+        crit_ring_radius = 220
+        
+    # 링 색상 결정 (목표에 가까워질수록 밝아짐)
+    dist = abs(crit_ring_radius - crit_target_radius)
+    ring_color = WHITE
+    if dist < 10: ring_color = YELLOW
+    elif dist < 30: ring_color = GREEN
+    
+    pygame.draw.circle(screen, ring_color, (cx, cy), int(crit_ring_radius), 4)
+    
+    # 사이버네틱 효과 (십자 가이드)
+    pygame.draw.line(screen, (100, 100, 100), (cx - 10, cy), (cx + 10, cy), 2)
+    pygame.draw.line(screen, (100, 100, 100), (cx, cy - 10), (cx, cy + 10), 2)
+
+
+
+def add_damage_label(text, x, y, color=RED, is_crit=False):
+    global damage_labels, screen_shake_time, screen_shake_intensity, hit_flash_time
+    # 약간의 위치 랜덤성
+    rx = x + random.randint(-30, 30)
+    ry = y + random.randint(-20, 20)
+    
+    # 임팩트 효과 트리거
+    screen_shake_time = 10 # 프레임 수 (조금 줄임)
+    screen_shake_intensity = 6 if is_crit else 3 # 강도 조절
+    
+    # 공격 이펙트 추가 (Procedural Effect)
+    add_effect("slash", rx, ry, color)
+    if is_crit:
+        add_effect("spark", rx, ry, YELLOW)
+
+    damage_labels.append({
+        "text": str(text),
+        "x": rx,
+        "y": ry,
+        "start_y": ry,
+        "timer": pygame.time.get_ticks(),
+        "color": color,
+        "is_crit": is_crit
+    })
+
+def add_effect(type, x, y, color):
+    global particles
+    if type == "slash":
+        # 베기 이펙트 (선이 그어지는 연출)
+        particles.append({
+            "type": "slash", "x": x, "y": y, "timer": 15, "max_timer": 15,
+            "angle": random.randint(0, 360), "color": color, "size": 100
+        })
+    elif type == "spark":
+        # 튀는 불꽃
+        for _ in range(8):
+            particles.append({
+                "type": "particle", 
+                "x": x, "y": y, 
+                "vx": random.uniform(-5, 5), "vy": random.uniform(-5, 5),
+                "timer": 20, "color": color, "size": random.randint(3, 6)
+            })
+
+def draw_effects(off_x, off_y):
+    global particles
+    for p in particles[:]:
+        p["timer"] -= 1
+        if p["timer"] <= 0:
+            particles.remove(p)
+            continue
+            
+        if p["type"] == "slash":
+            # 베기: 선이 빠르게 지나감
+            progress = 1 - (p["timer"] / p["max_timer"])
+            start_offset = -50 + progress * 100
+            end_offset = start_offset + 40
+            
+            # 각도 적용
+            rad = math.radians(p["angle"])
+            c, s = math.cos(rad), math.sin(rad)
+            
+            p1 = (p["x"] + c * start_offset + off_x, p["y"] + s * start_offset + off_y)
+            p2 = (p["x"] + c * end_offset + off_x,   p["y"] + s * end_offset + off_y)
+            
+            pygame.draw.line(screen, WHITE, p1, p2, 5) # Core styling
+            pygame.draw.line(screen, p["color"], p1, p2, 3) # Inner color
+
+        elif p["type"] == "particle":
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            pygame.draw.circle(screen, p["color"], (int(p["x"] + off_x), int(p["y"] + off_y)), p["size"])
+
+def draw_damage_labels():
+    global damage_labels
+    now = pygame.time.get_ticks()
+    DURATION = 1200
+    
+    for label in damage_labels[:]:
+        elapsed = now - label["timer"]
+        if elapsed > DURATION:
+            damage_labels.remove(label)
+            continue
+        
+        offset_y = (elapsed / DURATION) * 80
+        curr_y = label["start_y"] - offset_y
+        
+        # 폰트 크기 키우기 (메인 폰트보다 크게)
+        font_to_use = font # 기본 폰트 사용하되, 스케일링으로 처리 or 그냥 큰 폰트 객체 생성
+        
+        # 텍스트 렌더링
+        txt_surf = font_to_use.render(label["text"], True, label["color"])
+        # 크기 확대 (1.5배)
+        scale = 2.0 if label["is_crit"] else 1.5
+        w = int(txt_surf.get_width() * scale)
+        h = int(txt_surf.get_height() * scale)
+        scaled_surf = pygame.transform.scale(txt_surf, (w, h))
+        
+        # 외곽선 (검은색 그림자 효과)
+        shadow_surf = font_to_use.render(label["text"], True, BLACK)
+        shadow_scaled = pygame.transform.scale(shadow_surf, (w, h))
+        
+        # 위치
+        draw_x = label["x"] - w//2
+        draw_y = curr_y - h//2
+        
+        # 외곽선 그리기 (4방향)
+        for dx, dy in [(-2,0), (2,0), (0,-2), (0,2)]:
+            screen.blit(shadow_scaled, (draw_x + dx, draw_y + dy))
+            
+        screen.blit(scaled_surf, (draw_x, draw_y))
 
 def reset_battle(enemy_data=None):
     global battle_select, battle_timer, battle_messages, battle_step, battle_turn_count
     global player_battle_buffs, enemy_battle_debuffs, battle_mana_shield, battle_companion_idx, battle_taunt_target
-    global battle_enemy, is_boss_battle
+    global battle_enemy, is_boss_battle, damage_labels
+    damage_labels = [] # 이전 전투 잔상 제거
     battle_select = 0
     battle_timer = 0
     battle_messages = []
@@ -549,6 +947,9 @@ def reset_battle(enemy_data=None):
     if enemy_data:
         battle_enemy = enemy_data.copy()
         battle_enemy["max_hp"] = battle_enemy["hp"]
+        # 치명타 확률이 데이터에 없으면 기본값 0 설정 (KeyError 방지)
+        if "crit" not in battle_enemy:
+            battle_enemy["crit"] = 0
         is_boss_battle = enemy_data.get("is_boss", False)
         # 선공 결정 (민첩 비교)
         battle_step = 0 if player_stats["agi"] >= battle_enemy["agi"] else 4
@@ -568,13 +969,13 @@ def handle_companion_attack():
             battle_messages.append(f"{member['name']}의 지원 공격! {hd} 데미지!")
 
 def update_quest(text):
-    global quest_text
-    quest_text = text
+    # 호환성 위해 남겨둠 (실제로는 매니저 사용 권장)
+    pass
 
 def get_max_exp(level):
-    # 경험치 요구량을 10 단위로 깔끔하게 처리 (0으로 끝남)
-    raw_exp = 3 * level * level
-    return max(10, (raw_exp // 10) * 10)
+    # 레벨업 요구량 곡선을 조금 더 가파르게 조정하여 밸런스 유지
+    raw_exp = 5 * level * level + 10
+    return (raw_exp // 10) * 10
 
 def level_up():
     global player_level, player_stat_points, player_hp, player_mana, state, skill_points
@@ -582,12 +983,23 @@ def level_up():
     player_stat_points += 3
     skill_points += 1 # 레벨업 시 스킬 포인트 1 획득
     
-    # 레벨업 스탯 자동 상승 제거 (포인트만 지급)
-    # 체력, 마나는 회복
+    # 레벨업 시 체력, 마나는 최대치로 회복
     player_hp = player_max_hp
     player_mana = player_max_mana
-    # 전투 종료 후 바로 호출되므로 상태 변경은 여기서 하지 않거나, 
-    # 호출하는 쪽에서 제어. 여기서는 값만 변경.
+
+def trigger_level_up_check():
+    """XP가 증가했을 때 호출하여 레벨업 여부를 판단합니다."""
+    global player_exp, player_level, state
+    leveled = False
+    while player_exp >= get_max_exp(player_level):
+        player_exp -= get_max_exp(player_level)
+        level_up()
+        leveled = True
+    
+    if leveled:
+        # 상태 전환은 호출한 곳에서 적절히(대화 종료 후 등) 처리하도록 할 수도 있음
+        return True
+    return False
 
 def reset_levelup_allocations():
     global levelup_allocations, levelup_selected_stat
@@ -688,66 +1100,180 @@ def draw_town_objects():
     # 세로 도로 (중앙)
     pygame.draw.rect(screen, (150, 100, 60), (340, 0, 120, HEIGHT))
     
-    # 플레이어 그리기
-    pygame.draw.rect(screen, BLUE, player)
+    # 플레이어 그리기 (방향 반영)
+    draw_sprite(screen, "player", player, facing=player_facing)
     
-    # 헬퍼 함수: 인접 여부 확인
+    # 헬퍼 함수: 인접 여부 확인 (이동 거리 40 기준 보정)
     def is_near(n):
         return abs(player.x - n.x) <= 40 and abs(player.y - n.y) <= 40
 
     # 촌장
-    pygame.draw.rect(screen, GREEN, npc)
-    if quest_step == 0:
-        # 처음 튜토리얼: 멀리 있어도 표시
-        draw_text("[Z] 촌장과 대화", npc.x - 20, npc.y - 30, YELLOW, small=True)
-    elif quest_step == 12:
-        # 퀘스트 완료 보고: 멀리 있어도 표시
+    draw_sprite(screen, "chief", npc)
+    
+    # 메인 퀘스트 진행 중에는 항상 촌장에게 퀘스트 마커/텍스트를 띄워줌 (멀리 있어도)
+    # 다만 너무 멀면 "촌장" 이라고만 뜨고, 가까우면 "[Z] 대화" 등이 뜨는게 자연스러움
+    # 유저 요청: "원래 있었던것처럼 메인퀘스트를 할때는 촌장과 대화가 떠있게 해" -> 항상 표시
+    
+    main_q_id = quest_manager.main_quest_id
+    q_data = QUEST_DB.get(main_q_id)
+    
+    label_text = "[Z] 촌장"
+    is_main_active = q_data and q_data["type"] == "MAIN"
+    
+    # 완료 가능 상태 확인
+    is_ready = False
+    if is_main_active and q_data["end_npc"] == "촌장" and quest_manager.is_quest_active(main_q_id):
+         obj = q_data["objective"]
+         if obj["type"] in ["kill", "kill_boss", "collect"]:
+              curr = quest_manager.active_quests.get(main_q_id, {"current_count": 0})["current_count"]
+              if curr >= obj["count"]: is_ready = True
+         elif obj["type"] == "equip":
+              if player_equipment["weapon"] and player_equipment["armor"]: is_ready = True
+         elif obj["type"] == "level_job":
+              if player_level >= obj["target"] and player_job != "초보자": is_ready = True
+         elif obj["type"] == "talk":
+              is_ready = True
+
+    # 퀘스트 수락 전(가이드 필요) 상태 확인
+    needs_start = False
+    if q_data and q_data["start_npc"] == "촌장":
+        # 처치/수집 퀘스트인데 데이터가 없거나, 1번 퀘스트인 경우 (수락 전으로 판단)
+        if main_q_id not in quest_manager.active_quests:
+            if q_data["objective"]["type"] in ["kill", "collect", "kill_boss", "talk"] or main_q_id == 1:
+                needs_start = True
+
+    # 표시 조건: 보고 가능(Far) OR 새로운 퀘스트(Far) OR 진행 중(Far) OR 근처(Near)
+    if is_ready:
         draw_text("[Z] 촌장에게 보고", npc.x - 20, npc.y - 30, YELLOW, small=True)
+    elif needs_start:
+        draw_text("[Z] 촌장과 대화", npc.x - 20, npc.y - 30, YELLOW, small=True)
+    elif is_main_active: # 진행 중 상시 표시
+        draw_text("[Z] 촌장", npc.x, npc.y - 30, YELLOW, small=True)
     elif is_near(npc):
-        if quest_step == 2:
-            # 목표 달성 후 보고: 가까이 갈 때만 표시
-            draw_text("[Z] 촌장에게 보고", npc.x - 20, npc.y - 30, YELLOW, small=True)
+        draw_text("[Z] 촌장", npc.x, npc.y - 30, YELLOW, small=True)
 
     # 전직관
-    # 전직관은 상시 대화 가능 (퀘스트 개념이 아니므로 일단 유지하거나 필요시 수정)
-    pygame.draw.rect(screen, (150, 0, 150), npc_job)
-    if is_near(npc_job):
+    draw_sprite(screen, "job", npc_job)
+    job_report = False
+    for qid, progress in quest_manager.active_quests.items():
+        q_data = QUEST_DB[qid]
+        if q_data["end_npc"] == "전직관":
+             obj = q_data["objective"]
+             if obj["type"] == "kill" and progress["current_count"] >= obj["count"]:
+                  job_report = True; break
+             elif obj["type"] == "collect":
+                  cnt = sum(it.get("count", 1) for it in player_inventory if it["name"] == obj["target"])
+                  if cnt >= obj["count"]: job_report = True; break
+             elif obj["type"] == "level_job":
+                  if player_level >= obj["target"] and player_job != "초보자":
+                       job_report = True; break
+
+    # 전직관
+    # 진행 중인 전직관 관련 퀘스트 확인
+    job_active = any(QUEST_DB[qid]["end_npc"] == "전직관" or QUEST_DB[qid]["start_npc"] == "전직관" 
+                     for qid in quest_manager.active_quests)
+    
+    if job_report:
+        draw_text("[Z] 자격 보고", npc_job.x - 10, npc_job.y - 30, YELLOW, small=True)
+    elif job_active:
+        draw_text("[Z] 전직관", npc_job.x, npc_job.y - 30, YELLOW, small=True)
+    elif is_near(npc_job):
         draw_text("[Z] 전직관", npc_job.x, npc_job.y - 30, YELLOW, small=True)
 
     # 상점 (상시 이용 가능)
-    pygame.draw.rect(screen, (200, 200, 0), npc_store)
-    if is_near(npc_store):
+    draw_sprite(screen, "store", npc_store)
+    store_report = False
+    for qid, progress in quest_manager.active_quests.items():
+        if QUEST_DB[qid]["end_npc"] == "상점":
+             obj = QUEST_DB[qid]["objective"]
+             if obj["type"] == "kill" and progress["current_count"] >= obj["count"]:
+                  store_report = True; break
+             elif obj["type"] == "collect":
+                  cnt = sum(it.get("count", 1) for it in player_inventory if it["name"] == obj["target"])
+                  if cnt >= obj["count"]: store_report = True; break
+
+    # 상점 진행 중 퀘스트 확인
+    store_active = any(QUEST_DB[qid]["end_npc"] == "상점" or QUEST_DB[qid]["start_npc"] == "상점" 
+                       for qid in quest_manager.active_quests)
+
+    if store_report:
+        draw_text("[Z] 의뢰 보고", npc_store.x - 10, npc_store.y - 30, YELLOW, small=True)
+    elif store_active:
+        draw_text("[Z] 상점", npc_store.x, npc_store.y - 30, YELLOW, small=True)
+    elif is_near(npc_store):
         draw_text("[Z] 상점", npc_store.x, npc_store.y - 30, YELLOW, small=True)
 
     # 대장장이
-    pygame.draw.rect(screen, (60, 60, 65), npc_blacksmith)
-    if is_near(npc_blacksmith):
-        if quest_step == 4:
-            draw_text("[Z] 대장장이와 대화", npc_blacksmith.x - 20, npc_blacksmith.y - 30, YELLOW, small=True)
-        elif quest_step == 5:
-            bubble_count = sum(it.get('count', 1) for it in player_inventory if it['name'] == "슬라임 방울")
-            if bubble_count >= 5:
-                draw_text("[Z] 재료 전달", npc_blacksmith.x - 10, npc_blacksmith.y - 30, YELLOW, small=True)
-            else:
-                draw_text("[Z] 대장장이", npc_blacksmith.x, npc_blacksmith.y - 30, YELLOW, small=True)
-        else:
-            draw_text("[Z] 대장장이", npc_blacksmith.x, npc_blacksmith.y - 30, YELLOW, small=True)
+    draw_sprite(screen, "blacksmith", npc_blacksmith)
+    bs_report = False
+    for qid, progress in quest_manager.active_quests.items():
+        if QUEST_DB[qid]["end_npc"] == "대장장이":
+             obj = QUEST_DB[qid]["objective"]
+             if obj["type"] == "collect":
+                  cnt = sum(it.get("count", 1) for it in player_inventory if it["name"] == obj["target"])
+                  if cnt >= obj["count"]: bs_report = True; break
+    
+    # 대장장이 진행 중 퀘스트 확인
+    bs_active = any(QUEST_DB[qid]["end_npc"] == "대장장이" or QUEST_DB[qid]["start_npc"] == "대장장이" 
+                     for qid in quest_manager.active_quests)
+    
+    if bs_report:
+        draw_text("[Z] 의뢰 보고", npc_blacksmith.x - 10, npc_blacksmith.y - 30, YELLOW, small=True)
+    elif bs_active:
+        draw_text("[Z] 대장장이", npc_blacksmith.x, npc_blacksmith.y - 30, YELLOW, small=True)
+    elif is_near(npc_blacksmith):
+        draw_text("[Z] 대장장이", npc_blacksmith.x, npc_blacksmith.y - 30, YELLOW, small=True)
 
-    # 경비병
-    pygame.draw.rect(screen, (50, 50, 200), npc_guard)
-    # 퀘스트 대기 중일 때는 멀리서도 텍스트 표시
-    if quest_step in [3, 6]:
-        label = "대장장이의 부탁" if quest_step == 3 else "고블린 소탕 훈련"
-        draw_text(f"[Z] {label}", npc_guard.x - 40, npc_guard.y - 30, YELLOW, small=True)
+    # 경비병 (퀘스트 중개소)
+    draw_sprite(screen, "guard", npc_guard)
+    
+    # 1. 완료 가능한 퀘스트 확인 (보고 우선)
+    guard_report = False
+    for qid, progress in quest_manager.active_quests.items():
+        if QUEST_DB[qid]["end_npc"] == "경비병":
+             obj = QUEST_DB[qid]["objective"]
+             if obj["type"] == "kill" and progress["current_count"] >= obj["count"]:
+                 guard_report = True; break
+    
+    # 2. 새로 수락 가능한 서브 퀘스트 확인 (가이드)
+    guard_new = False
+    for qid, sq in QUEST_DB.items():
+        if sq["start_npc"] == "경비병" and sq["type"] == "SUB":
+             if not quest_manager.is_quest_completed(qid) and not quest_manager.is_quest_active(qid):
+                  if player_level >= sq["req_level"]:
+                       guard_new = True; break
+    
+    # 3. 진행 중인 퀘스트 확인
+    guard_active = any(QUEST_DB[qid]["end_npc"] == "경비병" or QUEST_DB[qid]["start_npc"] == "경비병" 
+                       for qid in quest_manager.active_quests)
+
+    if guard_report:
+        draw_text("[Z] 임무 보고", npc_guard.x - 10, npc_guard.y - 30, YELLOW, small=True)
+    elif guard_new:
+        draw_text("[Z] 새로운 임무", npc_guard.x - 10, npc_guard.y - 30, YELLOW, small=True)
+    elif guard_active:
+        draw_text("[Z] 경비병", npc_guard.x, npc_guard.y - 30, YELLOW, small=True)
     elif is_near(npc_guard):
-        if quest_step == 7 and monster_kills["goblin"] >= 5:
-             draw_text("[Z] 훈련 보고", npc_guard.x - 10, npc_guard.y - 30, YELLOW, small=True)
-        else:
-             draw_text("[Z] 경비병", npc_guard.x, npc_guard.y - 30, YELLOW, small=True)
+        draw_text("[Z] 경비병", npc_guard.x, npc_guard.y - 30, YELLOW, small=True)
 
     # 용병단장 (상시 이용 가능)
-    pygame.draw.rect(screen, (100, 50, 150), npc_recruit)
-    if is_near(npc_recruit):
+    draw_sprite(screen, "recruit", npc_recruit)
+    recruit_report = False
+    for qid, progress in quest_manager.active_quests.items():
+        if QUEST_DB[qid]["end_npc"] == "용병단장":
+             obj = QUEST_DB[qid]["objective"]
+             if obj["type"] == "kill" and progress["current_count"] >= obj["count"]:
+                  recruit_report = True; break
+
+    # 용병단 진행 중 퀘스트 확인
+    recruit_active = any(QUEST_DB[qid]["end_npc"] == "용병단장" or QUEST_DB[qid]["start_npc"] == "용병단장" 
+                         for qid in quest_manager.active_quests)
+
+    if recruit_report:
+        draw_text("[Z] 용병 보고", npc_recruit.x - 10, npc_recruit.y - 30, YELLOW, small=True)
+    elif recruit_active:
+        draw_text("[Z] 용병단", npc_recruit.x, npc_recruit.y - 30, YELLOW, small=True)
+    elif is_near(npc_recruit):
         draw_text("[Z] 용병단", npc_recruit.x, npc_recruit.y - 30, YELLOW, small=True)
 
 
@@ -760,10 +1286,11 @@ while running:
     dt = clock.tick(60)
     screen.fill(BLACK)
     keys = pygame.key.get_pressed()
+    events = pygame.event.get()
     now = pygame.time.get_ticks()
+    skip_esc_this_frame = False # 이번 프레임에서 ESC 메뉴를 열었는지 체크 (중복 처리 방지)
     
     # 이벤트 처리 (상태 무관 공통)
-    events = pygame.event.get()
     for event in events:
         if event.type == pygame.QUIT:
             running = False
@@ -775,15 +1302,36 @@ while running:
                     close_stat_menu(True) # 적용하며 닫기
                 elif state in [STATE_TOWN, STATE_FIELD]: 
                     open_stat_menu(state)
-            
-            # 설정 메뉴 토글 (ESC)
+        
+        # 설정/메뉴 (ESC)
+        if event.type == pygame.KEYDOWN:
             if event.key == KEY_ESC:
-                if state == STATE_SETTINGS:
-                    state = state_before_settings if 'state_before_settings' in globals() else STATE_TOWN
-                else:
-                    state_before_settings = state
-                    state = STATE_SETTINGS
-
+                if state == STATE_ESC_MENU:
+                    state = state_before_esc
+                    menu_nav_timer = now
+                elif state in [STATE_TOWN, STATE_FIELD, STATE_SELECT_MAP]: 
+                    state_before_esc = state
+                    state = STATE_ESC_MENU
+                    esc_menu_idx = 0
+                    menu_nav_timer = now
+                    skip_esc_this_frame = True # 메뉴를 막 열었음
+                elif state == STATE_SETTINGS:
+                    state = STATE_ESC_MENU # 설정에서 ESC 누르면 메뉴로
+                    menu_nav_timer = now
+                    skip_esc_this_frame = True
+        
+        # 퀘스트 버튼 클릭 처리 (마우스)
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1: # 좌클릭
+                mx, my = event.pos
+                mx = (mx - offset_x) / scale_factor
+                my = (my - offset_y) / scale_factor
+                
+                if state in [STATE_TOWN, STATE_FIELD] and quest_btn_rect.collidepoint(mx, my):
+                    if quest_manager.active_quests:
+                        state_before_quest_log = state
+                        state = STATE_QUEST_LOG
+                        menu_nav_timer = now
 
         if event.type == pygame.KEYDOWN:
             # X키로 메뉴 닫기 공통 (STATS, SETTINGS)
@@ -795,19 +1343,72 @@ while running:
                 # 상점은 키입력 직접 처리하므로 여기 없음.
 
     # ----------------------------------------
-    # 이름 입력
+    # 타이틀 화면
     # ----------------------------------------
-    if state == STATE_NAME:
-        screen.fill(BG_NAME)
-        draw_text_box("용사 이름을 입력하세요 (영어만)", 150, 150, 500, 50)
-        draw_text_box("입력: " + player_name, 150, 220, 500, 50)
-        draw_text_box("조작법: 방향키 이동, F키 상호작용, Z키 선택, 엔터 확정", 150, 290, 500, 50)
+    if state == STATE_TITLE:
+        screen.fill(BLACK)
+        draw_text("★ RPG WORLD ★", WIDTH//2, 120, YELLOW, center=True)
+        
+        has_any_save = any(os.path.exists(f"savegame_{i}.json") for i in range(1, 4))
+        
+        menu_items = ["새로운 모험 시작"]
+        if has_any_save:
+            menu_items.append("모험 이어하기")
+        menu_items.append("게임 종료")
+        
+        for i, item in enumerate(menu_items):
+            color = YELLOW if i == title_select_idx else WHITE
+            draw_text(item, WIDTH//2, 300 + i*60, color, center=True)
+            if i == title_select_idx:
+                draw_text("▶", WIDTH//2 - 120, 300 + i*60, YELLOW, center=True)
 
         for event in events:
             if event.type == pygame.KEYDOWN:
+                if event.key == KEY_UP:
+                    title_select_idx = (title_select_idx - 1) % len(menu_items)
+                    menu_nav_timer = now
+                elif event.key == KEY_DOWN:
+                    title_select_idx = (title_select_idx + 1) % len(menu_items)
+                    menu_nav_timer = now
+                elif event.key == KEY_ACTION_1:
+                    sel = menu_items[title_select_idx]
+                    if sel == "새로운 모험 시작":
+                        state = STATE_NAME
+                    elif sel == "모험 이어하기":
+                        state_before_save_load = STATE_TITLE
+                        save_load_mode = "load"
+                        state = STATE_SAVE_LOAD
+                    elif sel == "게임 종료":
+                        running = False
+                    menu_nav_timer = now
+
+    # ----------------------------------------
+    # 이름 입력
+    # ----------------------------------------
+    elif state == STATE_NAME:
+        screen.fill(BG_NAME)
+        draw_text_box("용사 이름을 입력하세요 (영어만)", 150, 150, 500, 50)
+        draw_text_box("입력: " + player_name, 150, 220, 500, 50)
+        draw_text_box("조작법: 방향키 이동, Z 선택, X 뒤로", 150, 290, 500, 50)
+        
+        for event in events:
+            if event.type == pygame.KEYDOWN:
                 if state == STATE_NAME:
-                    if event.key == pygame.K_RETURN and player_name != "":
+                    if event.key == KEY_ACTION_2: # 뒤로가기
+                        state = STATE_TITLE
+                        menu_nav_timer = now
+                    elif event.key == pygame.K_RETURN and player_name != "":
                         state = STATE_TOWN
+                        # [테스트 모드] 닉네임이 test인 경우 마왕 직전으로 점프
+                        if player_name.lower() == "test":
+                            player_level = 90
+                            player_stats["atk"] = 999999
+                            quest_manager.main_quest_id = 22
+                            # 이전 퀘스트들 모두 완료 처리
+                            for i in range(1, 22):
+                                quest_manager.completed_quests.add(i)
+                            if 22 in quest_manager.active_quests: del quest_manager.active_quests[22]
+                        
                         # DB 내의 호칭 업데이트
                         for k, d in COMPANION_DB.items():
                             d['desc'] = d['desc'].replace("주인공", player_name).replace("플레이어", player_name)
@@ -835,8 +1436,21 @@ while running:
 
 
         draw_text("↑사냥터", WIDTH//2, 20, WHITE, center=True, small=True)
-        update_quest("퀘스트: 촌장과 대화하기")
+        draw_text("[S] 저장", 10, HEIGHT - 30, GREY, small=True)
         
+        # 저장 메시지 표시
+        if save_msg_text and now - save_msg_timer < 2000:
+            draw_text(save_msg_text, WIDTH//2, HEIGHT//2, YELLOW, center=True)
+        else:
+            save_msg_text = ""
+
+        # S키 저장 단축키 (슬롯 선택 화면으로)
+        if keys[pygame.K_s] and now - menu_nav_timer > 500:
+            state_before_save_load = STATE_TOWN
+            save_load_mode = "save"
+            state = STATE_SAVE_LOAD
+            menu_nav_timer = now
+
         update_quest("퀘스트: 촌장과 대화하기")
         
         # 플레이어 이동 (그리드 방식)
@@ -852,9 +1466,11 @@ while running:
                 moved = True
             elif keys[KEY_LEFT]:
                 next_x -= player_speed
+                player_facing = "left"
                 moved = True
             elif keys[KEY_RIGHT]:
                 next_x += player_speed
+                player_facing = "right"
                 moved = True
             
             if moved:
@@ -881,151 +1497,143 @@ while running:
                     player_move_timer = now
 
         # 촌장 대화 (Interaction)
-        # 그리드니까 40 이하 거리면 인접
-        if ((abs(player.x - npc.x) <= 40 and abs(player.y - npc.y) == 0) or 
-            (abs(player.x - npc.x) == 0 and abs(player.y - npc.y) <= 40)):
+        if (abs(player.x - npc.x) <= 40 and abs(player.y - npc.y) <= 40):
             
             for event in events:
                 if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    menu_nav_timer = now
+                    # 퀘스트 대화 생성
+                    d_lines, r_info = quest_manager.get_npc_dialog("촌장", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    # 보상 적용 (골드/경험치)
+                    if r_info["gold"] > 0: player_gold += r_info["gold"]
+                    if r_info["exp"] > 0: 
+                        player_exp += r_info["exp"]
+                        if trigger_level_up_check():
+                            # 대화 중이면 대화 종료 후 레벨업 화면으로 가기 위해 플래그 설정
+                            globals()['pending_levelup'] = True
+                    
                     state = STATE_DIALOG
+                    current_dialog = d_lines
                     dialog_page = 0
-                    current_dialog = dialog_map.get(quest_step, dialog_map[3])
-                    menu_nav_timer = now # 타이머 초기화
-                    break # 한 번만 처리
+                    break
         
         # 상점 대화 (Interaction)
-        if ((abs(player.x - npc_store.x) <= 40 and abs(player.y - npc_store.y) == 0) or 
-            (abs(player.x - npc_store.x) == 0 and abs(player.y - npc_store.y) <= 40)):
+        if (abs(player.x - npc_store.x) <= 40 and abs(player.y - npc_store.y) <= 40):
             
             for event in events:
                 if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    state = STATE_STORE
-                    store_select_idx = 0
-                    menu_nav_timer = now # 타이머 초기화 (입력 중복 방지)
-                    break
+                    menu_nav_timer = now
+                    d_lines, r_info = quest_manager.get_npc_dialog("상점", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    # 퀘스트 중요 이벤트(보상, 수락)가 있으면 대화 표시, 아니면 상점 열기
+                    # "수락"은 판단하기 힘듦. 하지만 상점은 주로 완료/수집 퀘스트 관련이므로 보상 여부로 판단
+                    # 혹은 dialog 내용이 기본 인사가 아니면 띄움
+                    
+                    has_event = (r_info["gold"] > 0 or r_info["exp"] > 0 or len(r_info["items_added"]) > 0 or 
+                                 (len(d_lines) > 0 and "수락" in d_lines[-1]) or (len(d_lines) > 0 and "완료" in d_lines[-1]))
 
-        # 전직관 대화 (Interaction)
-        if ((abs(player.x - npc_job.x) <= 40 and abs(player.y - npc_job.y) == 0) or 
-            (abs(player.x - npc_job.x) == 0 and abs(player.y - npc_job.y) <= 40)):
-            
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    menu_nav_timer = now # 타이머 초기화
-                    if player_level < 10:
-                        # 10레벨 미만 대화
-                        state = STATE_DIALOG
-                        current_dialog = ["아직 전직할 준비가 되지 않았네.", "10레벨을 달성하고 오게."]
-                        dialog_page = 0
-                    elif player_job == "초보자":
-                        state = STATE_JOB_SELECT
+                    if has_event:
+                         if r_info["gold"] > 0: player_gold += r_info["gold"]
+                         if r_info["exp"] > 0: player_exp += r_info["exp"]
+                         state = STATE_DIALOG
+                         current_dialog = d_lines
+                         dialog_page = 0
                     else:
-                        state = STATE_DIALOG
-                        current_dialog = [f"이미 {player_job}의 길을 걷고 있군."]
-                        dialog_page = 0
+                         state = STATE_STORE
+                         store_select_idx = 0
                     break
 
-        # 대장장이 대화 (Interaction)
-        if ((abs(player.x - npc_blacksmith.x) <= 40 and abs(player.y - npc_blacksmith.y) == 0) or 
-            (abs(player.x - npc_blacksmith.x) == 0 and abs(player.y - npc_blacksmith.y) <= 40)):
+        # 전직관 대화
+        if (abs(player.x - npc_job.x) <= 40 and abs(player.y - npc_job.y) <= 40):
             
-            # 퀘스트 알림 표시
-            if quest_step == 4:
-                draw_text("!", npc_blacksmith.x + 15, npc_blacksmith.y - 40, YELLOW)
-            elif quest_step == 5:
-                # 재료 확인
-                bubble_count = sum(it.get('count', 1) for it in player_inventory if it['name'] == "슬라임 방울")
-                if bubble_count >= 5:
-                    draw_text("?", npc_blacksmith.x + 15, npc_blacksmith.y - 40, GREEN)
-           
             for event in events:
                 if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    if quest_step == 4:
-                        state = STATE_DIALOG
-                        current_dialog = ["어이, 거기 모험가!", "촌장님께 소식 들었네. 실력이 꽤 좋다며?", "내 부탁 하나만 들어주게. 슬라임 방울 5개만 구해다 줄 수 있나?", "연구 재료로 꼭 필요해서 말이야."]
-                        dialog_page = 0
-                        quest_step = 5
-                        update_quest("퀘스트: 슬라임 방울 5개 수집")
-                        menu_nav_timer = now
-                    elif quest_step == 5:
-                        bubble_count = sum(it.get('count', 1) for it in player_inventory if it['name'] == "슬라임 방울")
-                        if bubble_count >= 5:
-                            state = STATE_DIALOG
-                            current_dialog = ["오! 정말 가져왔군. 고맙네!", "이건 내가 대충 만든 거지만 꽤 쓸만할 거야.", "철 목걸이를 받았다! 장비창에서 장착해보게."]
-                            dialog_page = 0
-                            quest_step = 6
-                            update_quest("퀘스트 완료: 대장장이의 재료")
-                            
-                            # 재료 삭제
-                            rem = 5
-                            for it in player_inventory[:]:
-                                if it['name'] == "슬라임 방울":
-                                    if it.get('count',1) >= rem:
-                                        it['count'] -= rem
-                                        if it['count'] <= 0: player_inventory.remove(it)
-                                        rem = 0
-                                    else:
-                                        rem -= it.get('count',1)
-                                        player_inventory.remove(it)
-                                if rem <= 0: break
-                                
-                            add_item_to_inventory(ITEM_DB["iron_necklace"])
-                            menu_nav_timer = now
+                    menu_nav_timer = now
+                    d_lines, r_info = quest_manager.get_npc_dialog("전직관", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    has_event = (r_info["gold"] > 0 or r_info["exp"] > 0 or len(r_info["items_added"]) > 0 or 
+                                 (len(d_lines) > 0 and "수락" in d_lines[-1]) or (len(d_lines) > 0 and "완료" in d_lines[-1]))
+
+                    if has_event:
+                         if r_info["gold"] > 0: player_gold += r_info["gold"]
+                         if r_info["exp"] > 0: player_exp += r_info["exp"]
+                         state = STATE_DIALOG
+                         current_dialog = d_lines
+                         dialog_page = 0
+                    else:
+                         # 기존 전직 로직
+                        if player_level < 10:
+                             state = STATE_DIALOG
+                             current_dialog = ["아직 전직할 준비가 되지 않았네.", "10레벨을 달성하고 오게."]
+                             dialog_page = 0
+                        elif player_job == "초보자":
+                             state = STATE_JOB_SELECT
                         else:
-                            state = STATE_BLACKSMITH
-                            menu_nav_timer = now
+                             state = STATE_DIALOG
+                             current_dialog = [f"이미 {player_job}의 길을 걷고 있군."]
+                             dialog_page = 0
+                    break
+
+        # 대장장이 대화
+        if (abs(player.x - npc_blacksmith.x) <= 40 and abs(player.y - npc_blacksmith.y) <= 40):
+            
+            for event in events:
+                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    menu_nav_timer = now
+                    d_lines, r_info = quest_manager.get_npc_dialog("대장장이", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    has_event = (r_info["gold"] > 0 or r_info["exp"] > 0 or len(r_info["items_added"]) > 0 or 
+                                 (len(d_lines) > 0 and "수락" in d_lines[-1]) or (len(d_lines) > 0 and "완료" in d_lines[-1]))
+
+                    if has_event:
+                         if r_info["gold"] > 0: player_gold += r_info["gold"]
+                         if r_info["exp"] > 0: player_exp += r_info["exp"]
+                         state = STATE_DIALOG
+                         current_dialog = d_lines
+                         dialog_page = 0
                     else:
                         state = STATE_BLACKSMITH
-                        menu_nav_timer = now
+                        blacksmith_select_idx = 0
                     break
 
-        # 경비병 대화 (Interaction)
-        if ((abs(player.x - npc_guard.x) <= 40 and abs(player.y - npc_guard.y) == 0) or 
-            (abs(player.x - npc_guard.x) == 0 and abs(player.y - npc_guard.y) <= 40)):
+        # 경비병 대화
+        if (abs(player.x - npc_guard.x) <= 40 and abs(player.y - npc_guard.y) <= 40):
             
             for event in events:
                 if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    if quest_step == 3:
-                        state = STATE_DIALOG
-                        current_dialog = ["어이, 모험가! 마을 대장장이가 급하게 사람을 찾고 있더군.", "슬라임들을 잡으면서 '슬라임 방울' 5개만 모아다 주게.", "전부 모으면 대장장이에게 가져다주면 될 거야."]
-                        dialog_page = 0
-                        quest_step = 4
-                        update_quest("퀘스트: 슬라임 방울 5개 수집")
-                        menu_nav_timer = now
-                    elif quest_step == 6:
-                        state = STATE_DIALOG
-                        current_dialog = ["실력이 꽤 늘었군! 이제 정식 훈련을 시작하지.", "바람의 평원에 가서 고블린 5마리를 퇴치해오게.", "자네의 실력을 증명할 때다!"]
-                        dialog_page = 0
-                        quest_step = 7
-                        update_quest("퀘스트: 고블린 5마리 퇴치 (0/5)")
-                        menu_nav_timer = now
-                    elif quest_step == 7:
-                        if monster_kills["goblin"] >= 5:
-                            state = STATE_DIALOG
-                            current_dialog = ["훌륭하군! 고블린들을 완벽히 제압했어.", "이건 자네의 노력에 대한 보상일세. 은반지를 받게.", "앞으로도 마을의 안전을 위해 힘써주게!"]
-                            dialog_page = 0
-                            quest_step = 8
-                            update_quest("퀘스트 완료: 경비병의 인정")
-                            add_item_to_inventory(ITEM_DB["silver_ring"])
-                            player_gold += 1000
-                        else:
-                            state = STATE_DIALOG
-                            current_dialog = [f"아직 고블린 소탕이 끝나지 않았네! ({monster_kills['goblin']}/5)"]
-                            dialog_page = 0
-                        menu_nav_timer = now
-                    else:
-                        state = STATE_DIALOG
-                        current_dialog = ["마을의 평화는 내가 지킨다!"]
-                        dialog_page = 0
-                    break
-
-        # 용병단장 대화 (Interaction)
-        if ((abs(player.x - npc_recruit.x) <= 40 and abs(player.y - npc_recruit.y) == 0) or 
-            (abs(player.x - npc_recruit.x) == 0 and abs(player.y - npc_recruit.y) <= 40)):
-            
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    state = STATE_RECRUIT
                     menu_nav_timer = now
+                    d_lines, r_info = quest_manager.get_npc_dialog("경비병", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    if r_info["gold"] > 0: player_gold += r_info["gold"]
+                    if r_info["exp"] > 0: player_exp += r_info["exp"]
+                    
+                    state = STATE_DIALOG
+                    current_dialog = d_lines
+                    dialog_page = 0
+                    break
+
+        # 용병단장 대화
+        if (abs(player.x - npc_recruit.x) <= 40 and abs(player.y - npc_recruit.y) <= 40):
+            
+            for event in events:
+                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    menu_nav_timer = now
+                    d_lines, r_info = quest_manager.get_npc_dialog("용병단장", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    
+                    has_event = (r_info["gold"] > 0 or r_info["exp"] > 0 or len(r_info["items_added"]) > 0 or 
+                                 (len(d_lines) > 0 and "수락" in d_lines[-1]) or (len(d_lines) > 0 and "완료" in d_lines[-1]))
+
+                    if has_event:
+                         if r_info["gold"] > 0: player_gold += r_info["gold"]
+                         if r_info["exp"] > 0: player_exp += r_info["exp"]
+                         state = STATE_DIALOG
+                         current_dialog = d_lines
+                         dialog_page = 0
+                    else:
+                        state = STATE_RECRUIT
+                        recruit_select_idx = 0
+                    break
 
         # 위로 나가면 사냥터 선택 이동
         if player.y < 0:
@@ -1056,39 +1664,13 @@ while running:
             if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
                 dialog_page += 1
                 if dialog_page >= len(current_dialog):
-                    state = STATE_TOWN
-                    # 대화 종료 후 퀘스트 상태 업데이트
-                    if quest_step == 0:
-                        quest_step = 1
-                        update_quest("퀘스트: 슬라임을 물리치기")
-                    elif quest_step == 2:
-                        quest_step = 10
-                        update_quest("퀘스트: 장비 마련하기")
-                        player_gold += 1000
-
-                        # 안내 메시지 추가
-                        current_dialog = [
-                            "슬라임을 물리쳤군! 정말 훌륭하네.",
-                            "하지만 그 빈손으로는 다음 모험이 위험할 걸세.",
-                            "자, 여기 1000G를 줄 테니 상점에 가서 장비를 사게.",
-                            "가장 기본적인 '목검'과 '가죽 갑옷'이면 충분할 걸세.",
-                            "준비가 되면 다시 나에게 오게나."
-                        ]
-                        dialog_page = 0
-                        state = STATE_DIALOG 
-                    elif quest_step == 10:
-                        quest_step = 11
-                        update_quest("퀘스트: 목검과 가죽 갑옷 구매 (상점)")
-                    elif quest_step == 12:
-                        quest_step = 13
-                        current_dialog = [
-                            "오! 이제야 좀 모험가다운 모습이군.",
-                            "이제 마을 북쪽 입구의 '경비병'을 찾아가게.",
-                            "그가 자네의 실력을 더 단련시켜 줄 걸세."
-                        ]
-                        dialog_page = 0
-                        state = STATE_DIALOG
-                        quest_step = 3 # 기존 경비병 퀘스트 트리거 단계로 이동
+                    # 대화 종료 후 레벨업 대기 상태면 레벨업 화면으로, 아니면 마을로
+                    if globals().get('pending_levelup', False):
+                        state_before_levelup = STATE_TOWN
+                        state = STATE_LEVELUP
+                        globals()['pending_levelup'] = False
+                    else:
+                         state = STATE_TOWN
 
     # ----------------------------------------
     # 사냥터 선택
@@ -1152,57 +1734,35 @@ while running:
                     spawn_count_min = 1
                     spawn_count_max = 4
 
-                    # 튜토리얼(퀘스트 2단계 이하)에서는 숲에서 슬라임만 나오도록 강제
-                    if current_map_index == 0 and quest_step < 3:
+                    # 튜토리얼(초반 퀘스트)에서는 숲에서 슬라임만 나오도록 강제
+                    # 퀘스트ID 1번이 슬라임 처치 퀘스트임
+                    if current_map_index == 0 and quest_manager.main_quest_id <= 1:
                          available_monsters = ["slime"]
                          spawn_count_max = 1 # 튜토리얼은 1마리만
                     
-                    if available_monsters:
+                    if current_map_index == 7:
+                        # 마왕성 특수 룰: 바로 마왕(최종 보스) 소환
+                        mob_data = BOSS_DB[7].copy()
+                        mob_data["is_boss"] = True
+                        m_rect = pygame.Rect(WIDTH//2 - 20, HEIGHT//2 - 60, 40, 40)
+                        field_monsters.append({
+                            "rect": m_rect, "data": mob_data, "name": mob_data["name"],
+                            "dir": [0,0], "timer": 0, "key": "demon_king" 
+                        })
+                    elif available_monsters:
                         count = random.randint(spawn_count_min, spawn_count_max)
                         for _ in range(count):
                             mob_key = random.choice(available_monsters)
-                            mob_data = MONSTER_DB[mob_key].copy() # 복사해서 사용
-                            
-                            # 위치 랜덤 (그리드 정렬 - WIDTH는 800, HEIGHT는 600. 둘다 40배수)
-                            # UI영역 (상단20, 하단20 등) 제외하고 40~560, 40~760 정도?
+                            mob_data = MONSTER_DB[mob_key].copy()
                             rx = random.randrange(40, WIDTH - 40, 40)
-                            ry = random.randrange(40, HEIGHT - 80, 40) # 하단 UI 고려 (좀 더 위로)
-                            
-                            # 몬스터 객체 생성 (사이즈 축소)
+                            ry = random.randrange(40, HEIGHT - 80, 40)
                             m_rect = pygame.Rect(rx, ry, 40, 40)
-                            
                             monster_obj = {
-                                "rect": m_rect,
-                                "data": mob_data, # 스탯 포함
-                                "name": mob_data["name"],
-                                "dir": [0,0],
-                                "timer": 0,
-                                "key": mob_key
+                                "rect": m_rect, "data": mob_data, "name": mob_data["name"],
+                                "dir": [0,0], "timer": 0, "key": mob_key
                             }
                             field_monsters.append(monster_obj)
 
-                    if current_map_index == 0:
-                        if quest_step == 0:
-                             update_quest("퀘스트: 촌장에게 먼저 말을 거세요")
-                        elif quest_step == 1:
-                            update_quest("퀘스트: 슬라임 물리치기")
-                        elif quest_step == 5:
-                            update_quest("퀘스트: 슬라임 방울 5개 수집")
-                        elif quest_step == 7:
-                            update_quest(f"퀘스트: 고블린 퇴치 ({monster_kills['goblin']}/5)")
-                        elif quest_step == 11:
-                             # 아이템 보유 체크를 여기서 수행 (매 프레임)
-                             has_sword = any(it['name'] == ITEM_DB["wooden_sword"]["name"] for it in player_inventory)
-                             has_armor = any(it['name'] == ITEM_DB["leather_armor"]["name"] for it in player_inventory)
-                             if has_sword and has_armor:
-                                 quest_step = 12
-                                 update_quest("퀘스트 완료: 장비 마련 (촌장 보고)")
-                             else:
-                                 update_quest("퀘스트: 목검과 가죽 갑옷 구매 (상점)")
-                        elif quest_step == 12:
-                             update_quest("퀘스트 완료: 장비 마련 (촌장 보고)")
-                        else:
-                            update_quest("자유롭게 사냥하세요")
                 else:
                     msg_text = "레벨이 부족합니다!"
                     msg_timer = now
@@ -1219,15 +1779,26 @@ while running:
         # 현재 맵 배경색 사용
         screen.fill(MAP_DATA[current_map_index]["color"])
         # draw_grid() # 격자 제거
-        pygame.draw.rect(screen, BLUE, player)
+        draw_sprite(screen, "player", player, facing=player_facing)
         
         # 맵 이름 표시 (상단 중앙)
         draw_text(MAP_DATA[current_map_index]["name"], WIDTH//2, 20, WHITE, center=True, small=True)
+        draw_text("[S] 저장", 10, HEIGHT - 30, GREY, small=True)
+
+        if save_msg_text and now - save_msg_timer < 2000:
+            draw_text(save_msg_text, WIDTH//2, HEIGHT//2, YELLOW, center=True)
+
+        if keys[pygame.K_s] and now - menu_nav_timer > 500:
+            state_before_save_load = STATE_FIELD
+            save_load_mode = "save"
+            state = STATE_SAVE_LOAD
+            menu_nav_timer = now
 
         if field_monsters:
             monster_respawn_timer = 0 # 몬스터가 있으면 리스폰 타이머 초기화 (확실하게)
             for mob in field_monsters:
-                pygame.draw.rect(screen, RED, mob["rect"])
+                m_key = mob.get("key", "slime")
+                draw_sprite(screen, m_key, mob["rect"])
                 draw_text(mob["name"], mob["rect"].x, mob["rect"].y - 25, RED, small=True)
                 
                 # 이동 로직 (추격 AI + 그리드)
@@ -1268,16 +1839,15 @@ while running:
                 
                 # 40px 이하 (딱 붙거나 겹칠 때)
                 if dist_x <= 40 and dist_y <= 40:
-                    if current_map_index == 0 and quest_step == 0:
-                         draw_text("먼저 촌장에게 말을 거세요!", player.x, player.y - 30, RED, small=True)
-                    else:
-                        # 전투 시작
-                        if now - battle_cooldown_timer > BATTLE_COOLDOWN_TIME:
-                            reset_battle(mob["data"])
-                            state = STATE_BATTLE
+                    if now - battle_cooldown_timer > BATTLE_COOLDOWN_TIME:
+                        analytics.log("combat", "total_battles")
+                        # 현재 맵의 권장 레벨보다 낮으면 챌린지 카운트
+                        if player_level < MAP_DATA[current_map_index].get("min_lv", 0):
+                            analytics.log("combat", "high_lv_challenge_count")
                             
-                            # 전투 대상 설정
-                            battle_target_mob = mob
+                        reset_battle(mob["data"])
+                        state = STATE_BATTLE
+                        battle_target_mob = mob
         # 플레이어 이동 (그리드)
         if now - player_move_timer > PLAYER_MOVE_INTERVAL:
             next_x, next_y = player.x, player.y
@@ -1291,9 +1861,11 @@ while running:
                 moved = True
             elif keys[KEY_LEFT]:
                 next_x -= player_speed
+                player_facing = "left"
                 moved = True
             elif keys[KEY_RIGHT]:
                 next_x += player_speed
+                player_facing = "right"
                 moved = True
             
             if moved:
@@ -1315,21 +1887,23 @@ while running:
         # 숲 아래로 가면 마을로
         if player.y >= HEIGHT:
             state = STATE_TOWN
-            player.x, player.y = player_town_pos
+            player.x, player.y = 400, 10 # 마을 위쪽 입구에서 나타남
             # 퀘스트 완료 상태로 복귀했다면 자동 대화 X, 촌장에게 가야함
-            if quest_step == 2:
-                # update_quest("퀘스트: 촌장에게 완료 보고") # 이미 되어있음
-                pass
-            elif quest_step == 1:
-                update_quest("퀘스트: 촌장과 대화하기") # ?? 사냥 중단?
-                pass
+            pass
             
             monster_respawn_timer = 0
             
         else:
              # 몹이 없으면 리스폰 타이머 작동
-            if current_map_index == 0 and quest_step < 3:
-                pass # 튜토리얼 중 리스폰 X
+            if current_map_index == 7:
+                 # 마왕성에서는 리스폰 없음 (단판 승부)
+                 pass
+            elif current_map_index == 0 and quest_manager.main_quest_id <= 1:
+                 pass # 튜토리얼 중인데... 일단 리스폰 허용하자? 아니면 유지?
+                 # 기존 로직: quest_step < 3 (1, 2) 일때 pass (리스폰 X라는 뜻?)
+                 # 아니 1328에 "몹이 없으면" 이니까...
+                 # 튜토리얼때는 한마리 잡으면 끝이니까 리스폰 안하는게 맞을 수도.
+                 pass 
             else:
                 if monster_respawn_timer == 0:
                     monster_respawn_timer = now
@@ -1339,13 +1913,12 @@ while running:
                     
                     # 튜토리얼 몬스터 제한 (리스폰 시에도 적용)
                     if current_map_index == 0: # 튜토리얼 맵
-                        if quest_step == 2: # 이미 잡았고 보고 전이면 리스폰 안 함
-                            available_monsters = []
-                        elif quest_step < 2: # 아직 안 잡았거나 퀘스트 중이면 1마리 유지
-                            available_monsters = ["slime"]
-                            spawn_count_max = 1
+                        if quest_manager.main_quest_id <= 1:
+                             # 튜토리얼 기간엔 슬라임만 1마리
+                             available_monsters = ["slime"]
+                             spawn_count_max = 1
                         else:
-                            spawn_count_max = 4
+                             spawn_count_max = 4
                     else:
                         spawn_count_max = 4
 
@@ -1380,12 +1953,25 @@ while running:
     # 전투
     # ----------------------------------------
     elif state == STATE_BATTLE:
+        # global screen_shake_time, hit_flash_time # Removed to fix SyntaxError
+        
+        # 스크린 쉐이크 계산
+        off_x, off_y = 0, 0
+        if screen_shake_time > 0:
+            off_x = random.randint(-screen_shake_intensity, screen_shake_intensity)
+            off_y = random.randint(-screen_shake_intensity, screen_shake_intensity)
+            screen_shake_time -= 1
+            
         screen.fill(BG_BATTLE)
-        # 전투 UI
-        slime_rect = pygame.Rect(50, 50, 80, 80)
-        player_rect = pygame.Rect(600, 300, 80, 80)
+        
+        # 모든 전투 오브젝트에 오프셋 적용
+        slime_rect = pygame.Rect(50 + off_x, 50 + off_y, 80, 80)
+        player_rect = pygame.Rect(600 + off_x, 300 + off_y, 80, 80)
         pygame.draw.rect(screen, RED, slime_rect)
         pygame.draw.rect(screen, BLUE, player_rect)
+        
+        # 이펙트 그리기 (캐릭터 위)
+        draw_effects(off_x, off_y)
         
         draw_text(f"{battle_enemy['name']} HP: {battle_enemy['hp']}/{battle_enemy['max_hp']}", slime_rect.x, slime_rect.y - 25)
         draw_text(f"{player_name} HP: {player_hp}", player_rect.x, player_rect.y - 25)
@@ -1393,6 +1979,23 @@ while running:
         msg_box_y = 400
         pygame.draw.rect(screen, BLACK, (50, msg_box_y, 700, 100))
         pygame.draw.rect(screen, WHITE, (50, msg_box_y, 700, 100), 1)
+        
+        # 히트 플래시 (맞았을 때 흰색 반짝임)
+        if hit_flash_time > 0:
+            # 전체 화면 혹은 타격 부위에 플래시
+            # 여기서는 연출 극대화를 위해 전체 박스 살짝 덮음
+            flash_surf = pygame.Surface((WIDTH, HEIGHT))
+            flash_surf.fill(WHITE)
+            flash_surf.set_alpha(100)
+            screen.blit(flash_surf, (0,0))
+            hit_flash_time -= 1
+        
+        # 데미지 수치 출력
+        draw_damage_labels()
+        
+        # 크리티컬 바 출력
+        if battle_step == BATTLE_STEP_CRITICAL:
+            draw_soul_sync()
         
         # 메시지 시퀀스 연출
         if battle_messages:
@@ -1439,18 +2042,9 @@ while running:
                     if now - menu_nav_timer > 300:
                         menu_nav_timer = now
                         if battle_select == 0: # 공격
-                            atk_bonus = 1.3 if "공격력" in player_battle_buffs else 1.0
-                            crit_bonus = 20 if "크리티컬" in player_battle_buffs else 0
-                            
-                            # 공격 시퀀스 시작
-                            hd, hc = calculate_damage(player_stats["atk"] * atk_bonus, battle_enemy["def"], player_stats["crit"] + crit_bonus)
-                            battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                            
-                            battle_messages = [f"{player_name}의 공격! {hd} 데미지!"]
-                            if hc: battle_messages.append(random.choice(CRIT_SCRIPTS))
-                            
-                            battle_step = 1 # 메시지 연출 단계로
-                            battle_timer = now
+                            # 소울 싱크 단계로 진입
+                            battle_step = BATTLE_STEP_CRITICAL
+                            crit_ring_radius = 220 # 원의 시작 크기
                             menu_nav_timer = now
                         elif battle_select == 1: # 스킬 (메뉴 진입)
                             battle_step = 10 # 스킬 선택 모드
@@ -1471,6 +2065,68 @@ while running:
                                 battle_messages = ["도망에 실패했다!"]
                                 battle_step = 1 # 적 턴으로 넘어감
                                 battle_timer = now
+
+        elif battle_step == BATTLE_STEP_CRITICAL:
+            for event in events:
+                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    # 거리 계산 (중앙 타겟 반경과의 차이)
+                    dist = abs(crit_ring_radius - crit_target_radius)
+                    
+                    if dist <= 8:
+                        crit_result = "PERFECT"
+                        crit_multiplier = 2.2
+                        analytics.log("action", "perfect_hits")
+                    elif dist <= 25:
+                        crit_result = "GREAT"
+                        crit_multiplier = 1.6
+                    elif dist <= 50:
+                        crit_result = "GOOD"
+                        crit_multiplier = 1.3
+                    else:
+                        crit_result = "MISSED"
+                        crit_multiplier = 1.0
+                        analytics.log("action", "miss_hits")
+
+                    # 데미지 계산 및 적용
+                    atk_bonus = 1.3 if "공격력" in player_battle_buffs else 1.0
+                    crit_bonus = 20 if "크리티컬" in player_battle_buffs else 0
+                    
+                    # 빈사 상태 공격 체크
+                    if player_hp / player_max_hp <= 0.2:
+                        analytics.log("combat", "low_hp_attack_count")
+
+                    hd, hc = calculate_damage(player_stats["atk"] * atk_bonus * crit_multiplier, 
+                                           battle_enemy["def"], 
+                                           player_stats["crit"] + crit_bonus)
+                    battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
+                    
+                    # 데미지 라벨 추가 (비주얼 강조)
+                    is_p = (crit_result == "PERFECT")
+                    add_damage_label(hd, 90, 80, YELLOW if is_p else RED, is_crit=is_p)
+                    
+                    battle_messages = [f"{crit_result}!"] # 데미지 텍스트 제거
+                    if hc or crit_result == "PERFECT":
+                         battle_messages.append(random.choice(CRIT_SCRIPTS))
+                    
+                    battle_step = 1
+                    battle_timer = now
+                    menu_nav_timer = now
+
+        elif battle_step == BATTLE_STEP_DEATH:
+            draw_text("전투에서 패배했습니다...", WIDTH//2, HEIGHT//2 - 20, RED, center=True)
+            draw_text("[Z] 마을로 돌아가기", WIDTH//2, HEIGHT//2 + 20, WHITE, center=True, small=True)
+            for event in events:
+                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    # 복귀 성능 측정 (사망 후 복귀까지 걸린 시간 합산)
+                    death_time = analytics.data.get("last_death_time", now)
+                    analytics.log("combat", "retry_speed_sum", now - death_time)
+                    analytics.log("combat", "retry_count")
+                    
+                    # 상태 회복 및 강제 이동
+                    player_hp = int(player_max_hp) # 100% 체력으로 부활
+                    state = STATE_TOWN
+                    player.x, player.y = player_start_pos
+                    menu_nav_timer = now
 
         elif battle_step == 10: # 스킬 선택 화면
             pygame.draw.rect(screen, BLACK, (50, HEIGHT - 150, WIDTH - 100, 140))
@@ -1507,6 +2163,20 @@ while running:
                             
                             if player_mana >= skill_data["mana"]:
                                 player_mana -= skill_data["mana"]
+                                
+                                # 스킬 성향 로깅
+                                if player_job == "마법사":
+                                    analytics.log("skills", "magic")
+                                elif player_job == "전사":
+                                    analytics.log("skills", "physical")
+                                elif player_job == "사수":
+                                    analytics.log("skills", "physical")
+                                else:
+                                    analytics.log("skills", "physical") # 기본
+
+                                # 빈사 상태 스킬 공격 체크
+                                if player_hp / player_max_hp <= 0.2:
+                                    analytics.log("combat", "low_hp_attack_count")
                                 
                                 # 공통 효과 처리
                                 effect_msgs = []
@@ -1654,17 +2324,21 @@ while running:
                                 sub_msg = "적들의 주의를 자신에게 고정시켰습니다!"
                             elif s_type == "heal":
                                 player_hp = min(player_max_hp, player_hp + s_power)
+                                add_damage_label(f"+{s_power}", 640, 330, GREEN) # Heal on player
                                 sub_msg = f"{player_name}님의 HP가 {s_power} 회복되었습니다."
                             elif s_type == "mana":
                                 player_mana = min(player_max_mana, player_mana + s_power)
+                                add_damage_label(f"+{s_power}", 640, 330, BLUE) # Mana on player
                                 sub_msg = f"{player_name}님의 MP가 {s_power} 회복되었습니다."
                             elif s_type == "damage":
                                 hd, _ = calculate_damage(atk_val * s_power, battle_enemy["def"], 20)
                                 battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
+                                add_damage_label(hd, 90, 80, RED) # Damage on enemy
                                 sub_msg = f"{hd}의 피해를 입혔습니다!"
                             
                             battle_messages = [msg]
                             if sub_msg: battle_messages.append(sub_msg)
+                            analytics.log("growth", "companion_skill_usage")
                         
                         battle_step = 31 # 동료 메시지 연출 단계
                         battle_timer = now
@@ -1709,8 +2383,13 @@ while running:
             if target == "player":
                 damage, crit = calculate_damage(enemy_atk, player_stats["def"], battle_enemy["crit"])
                 player_hp = max(0, player_hp - damage)
-                battle_messages = [f"{battle_enemy['name']}의 공격! {player_name}에게 {damage} 데미지!"]
+                add_damage_label(damage, 640, 330, RED if crit else WHITE, is_crit=crit) # Damage on player
+                battle_messages = ["위험합니다!"] if player_hp < player_max_hp * 0.2 else []
                 if crit: battle_messages.append("치명타를 입었습니다!")
+                
+                if player_hp <= 0:
+                    analytics.log("combat", "death_count")
+                    analytics.data["last_death_time"] = pygame.time.get_ticks()
             else:
                 c_idx = int(target[-1])
                 comp = player_party[c_idx]
@@ -1726,6 +2405,7 @@ while running:
             if now - battle_timer > 1500:
                 battle_messages = []
                 battle_turn_count += 1
+                analytics.log("combat", "total_turns")
                 battle_step = 0 # 다시 플레이어 메뉴로
                 battle_timer = now
 
@@ -1762,6 +2442,14 @@ while running:
                         eff = item.get("effect")
                         val = item.get("value", 0)
                         
+                        if eff == "hp" or eff == "hp_mana":
+                            # 포션 사용 성향 로깅
+                            hp_ratio = player_hp / player_max_hp
+                            if hp_ratio <= 0.2:
+                                analytics.log("growth", "potion_emergency")
+                            elif hp_ratio >= 0.7:
+                                analytics.log("growth", "potion_habitual")
+
                         if eff == "hp":
                             player_hp = min(player_max_hp, player_hp + val)
                             battle_messages = [f"{item['name']}을(를) 사용하여 체력을 {val} 회복했습니다!"]
@@ -1936,6 +2624,11 @@ while running:
                         enemy_battle_debuffs[k] -= 1
                         if enemy_battle_debuffs[k] <= 0: del enemy_battle_debuffs[k]
 
+                if player_hp <= 0:
+                    battle_step = BATTLE_STEP_DEATH
+                    battle_timer = now
+                    continue
+
                 if not battle_messages or (len(battle_messages)==1 and "공격!" in battle_messages[0]): 
                     battle_messages = []
                     battle_step = 0
@@ -1958,12 +2651,8 @@ while running:
                 player_gold += gold_gain
                 
                 # 퀘스트 카운트
-                if battle_enemy["name"] == "고블린":
-                    monster_kills["goblin"] += 1
-                elif battle_enemy["name"] == "오크":
-                    monster_kills["orc"] += 1
-                elif battle_enemy["name"] == "킹 슬라임":
-                    monster_kills["king_slime"] += 1
+                # print(f"DEBUG: Monster killed: {battle_enemy['name']}")
+                quest_manager.on_kill_monster(battle_enemy["name"])
                 
                 msg = f"승리! 경험치 {exp_gain}, {gold_gain}G 획득"
                 
@@ -1993,25 +2682,25 @@ while running:
                     field_monsters.remove(battle_target_mob)
                     # battle_target_mob 변수 제거는 밑에서 자동 처리 (여기서는 리스트에서만 제거)
 
-                # 레벨업 체크
-                max_exp = get_max_exp(player_level)
-                if player_exp >= max_exp:
-                    player_exp -= max_exp
-                    level_up()
+                # 마왕(최종 보스) 토벌 체크
+                if battle_enemy.get("is_last"):
+                    state = STATE_ENDING
+                # 레벨업 체크 (전투 승리 시)
+                elif trigger_level_up_check():
+                    state_before_levelup = STATE_FIELD
                     state = STATE_LEVELUP
                 else:
                     state = STATE_FIELD # 필드 복귀
                     battle_cooldown_timer = now 
 
-                # 퀘스트 목표 달성
-                if quest_step == 1 and current_map_index == 0:
-                    quest_step = 2
-                    update_quest("퀘스트: 촌장에게 돌아가기")
+                # 퀘스트 목표 달성 (QuestManager가 처리하므로 삭제)
+                # if quest_step == 1 ... (삭제됨)
                 
                 battle_messages = []
         
         elif battle_step == 5: # 도망 성공 대기
             if now - battle_timer > 1000: # 1초 대기
+                analytics.log("combat", "flee_count")
                 state = STATE_FIELD
                 battle_cooldown_timer = now # 무적 시간 적용
                 battle_messages = []
@@ -2020,8 +2709,6 @@ while running:
                 # 보통 도망치면 몬스터는 그대로 있거나 (다시 싸우면 체력 리셋?), 아니면 사라짐.
                 # 편의상 제거하지 않음. 대신 전투 종료 시 battle_target_mob 관련 처리가 3번 단계 뒤에 있음.
                 # 5번 단계에서는 그냥 필드로 복귀.
-
-            battle_timer = now
 
         elif battle_step == 4:
             damage, _ = calculate_damage(battle_enemy["atk"], player_stats["def"], battle_enemy["crit"])
@@ -2041,7 +2728,7 @@ while running:
         draw_text_box("[Z] 계속", WIDTH//2 - 67, HEIGHT//2 + 60, 135, 50, color_bg=BLACK, color_text=YELLOW)
         if keys[KEY_ACTION_1]:
             pygame.time.delay(150)
-            state = STATE_FIELD # 마을이 아닌 필드로 복귀
+            state = state_before_levelup
             # 위치는 그대로 유지 (전투 전 위치)
 
     elif state == STATE_STATS:
@@ -2463,14 +3150,21 @@ while running:
         MAX_DISPLAY = 7
 
         if store_mode == 0: # 구매
-             # 레벨 및 직업별 아이템 필터링
+             # 현재 소유 중인 장비 이름 목록 (인벤토리 + 장착)
+            owned_equips = [it["name"] for it in player_inventory if it["type"] in ["weapon", "armor", "accessory"]]
+            for slot in player_equipment.values():
+                if slot: owned_equips.append(slot["name"])
+
+             # 레벨, 직업별 아이템 필터링 및 이미 소유한 장비 제외
             allowed_items = [
                 (k, v) for k, v in ITEM_DB.items() 
-                if player_level >= v.get("min_lv", 1) and (v.get("job") == player_job or "job" not in v)
+                if player_level >= v.get("min_lv", 1) 
+                and (v.get("job") == player_job or "job" not in v)
+                and (v["type"] not in ["weapon", "armor", "accessory"] or v["name"] not in owned_equips)
             ]
             
             # 튜토리얼 퀘스트 2 필터링
-            if quest_step == 11:
+            if quest_manager.main_quest_id == 2:
                 allowed_items = [(k, v) for k, v in allowed_items if k in ["wooden_sword", "leather_armor"]]
             
             target_list = allowed_items
@@ -2527,7 +3221,11 @@ while running:
                 # 선택된 아이템 설명 및 가격 정보
                 if abs_idx == store_select_idx:
                     if store_adjust_mode:
-                        desc = f"▶ 판매 수량 조절: {store_sell_qty}개 (총 {price * store_sell_qty}G)"
+                        item_info = item_data[1] if store_mode == 0 else item_data
+                        if item_info['type'] in ['potion', 'misc']:
+                             desc = f"▶ {'구매' if store_mode == 0 else '판매'} 수량 조절: {store_buy_qty if store_mode == 0 else store_sell_qty}개 (총 {price * (store_buy_qty if store_mode == 0 else store_sell_qty)}G)"
+                        else:
+                             desc = f"▶ {item_info['name']}을(를) 정말로 {'구매' if store_mode == 0 else '판매'}하시겠습니까?"
                     else:
                         desc = f"▷ {current_item.get('desc', '설명 없음')}"
                         if store_mode == 0 and current_item.get("min_lv", 1) > 1 and current_item.get("min_lv", 1) != 999:
@@ -2567,27 +3265,34 @@ while running:
                 if store_mode == 0: # 구매
                     # current_data는 (key, dict) 튜플
                     item_info = current_data[1]
-                    price = item_info.get('price', 999999)
-                    max_buy_possible = max(1, player_gold // price) if price > 0 else 1
-                    
-                    if keys[KEY_RIGHT]:
-                        store_buy_qty = min(max_buy_possible, store_buy_qty + 1)
-                        menu_nav_timer = now - 50
-                    elif keys[KEY_LEFT]:
-                        store_buy_qty = max(1, store_buy_qty - 1)
-                        menu_nav_timer = now - 50
+                    if item_info['type'] in ['potion', 'misc']:
+                        price = item_info.get('price', 999999)
+                        max_buy_possible = max(1, player_gold // price) if price > 0 else 1
+                        
+                        if keys[KEY_RIGHT]:
+                            store_buy_qty = min(max_buy_possible, store_buy_qty + 1)
+                            menu_nav_timer = now - 50
+                        elif keys[KEY_LEFT]:
+                            store_buy_qty = max(1, store_buy_qty - 1)
+                            menu_nav_timer = now - 50
+                    else:
+                        # 장비류는 수량 고정
+                        store_buy_qty = 1
                 
                 else: # 판매
                     # current_data는 dict
                     item_info = current_data
-                    max_sell_possible = item_info.get('count', 1)
+                    if item_info['type'] in ['potion', 'misc']:
+                        max_sell_possible = item_info.get('count', 1)
 
-                    if keys[KEY_RIGHT]:
-                        store_sell_qty = min(max_sell_possible, store_sell_qty + 1)
-                        menu_nav_timer = now - 50
-                    elif keys[KEY_LEFT]:
-                        store_sell_qty = max(1, store_sell_qty - 1)
-                        menu_nav_timer = now - 50
+                        if keys[KEY_RIGHT]:
+                            store_sell_qty = min(max_sell_possible, store_sell_qty + 1)
+                            menu_nav_timer = now - 50
+                        elif keys[KEY_LEFT]:
+                            store_sell_qty = max(1, store_sell_qty - 1)
+                            menu_nav_timer = now - 50
+                    else:
+                        store_sell_qty = 1
 
         # 선택 및 확정 액션 [KEYDOWN으로 통일]
         for event in events:
@@ -2595,12 +3300,24 @@ while running:
                 if now - menu_nav_timer > 300 and target_list:
                     if not store_adjust_mode:
                         if store_mode == 0: # 구매 모드 진입
-                            store_adjust_mode = True
-                            store_buy_qty = 1
+                            item_key, item_info = target_list[store_select_idx]
+                            # 수량 조절 가능 여부 판단 (포션/재료만 가능)
+                            if item_info['type'] in ['potion', 'misc']:
+                                store_adjust_mode = True
+                                store_buy_qty = 1
+                            else:
+                                # 장비류는 바로 1개 구매 진행 (구매 확인 질문 단계로 간주)
+                                store_adjust_mode = True # 내부적으론 진입하되 수량 고정
+                                store_buy_qty = 1
                             menu_nav_timer = now
                         else: # 판매 모드 진입
-                            store_adjust_mode = True
-                            store_sell_qty = 1
+                            removed_item = target_list[store_select_idx]
+                            if removed_item.get('count', 1) > 1:
+                                store_adjust_mode = True
+                                store_sell_qty = 1
+                            else:
+                                store_adjust_mode = True
+                                store_sell_qty = 1
                             menu_nav_timer = now
                     else: # 수량 조절 후 확정
                         if store_mode == 0: # 구매 확정
@@ -3026,6 +3743,7 @@ while running:
                             blacksmith_msg = "이미 최대 강화 단계입니다."
                         elif player_gold >= gold_cost and current_loot_count >= loot_required:
                             # 강화 진행
+                            analytics.log("growth", "blacksmith_attempts")
                             player_gold -= gold_cost
                             # 특정 전리품 소모 (스택 대응)
                             needed = loot_required
@@ -3073,168 +3791,190 @@ while running:
                 menu_nav_timer = now
                 blacksmith_msg = ""
 
-    # ----------------------------------------
-    # 치트 메뉴 (Cheat Menu)
-    # ----------------------------------------
-    elif state == STATE_CHEAT:
-        screen.fill(BG_LEVELUP)
-        draw_text("★ 치트 메뉴 ★", WIDTH//2, 50, YELLOW, center=True)
+    # 퀘스트 버튼 UI (전투 외)
+    if state in [STATE_TOWN, STATE_FIELD] and quest_manager.active_quests:
+        pygame.draw.rect(screen, (50, 50, 50), quest_btn_rect)
+        pygame.draw.rect(screen, WHITE, quest_btn_rect, 2)
+        draw_text("퀘스트 [Q]", quest_btn_rect.centerx, quest_btn_rect.centery, YELLOW, center=True, small=True)
+    
+    # 엔딩 화면
+    elif state == STATE_ENDING:
+        screen.fill(BLACK)
+        draw_text("★ 게임 클리어 ★", WIDTH//2, 100, YELLOW, center=True)
+        draw_text("세상의 평화를 되찾았습니다!", WIDTH//2, 160, WHITE, center=True)
         
-        cheat_options = [
-            ("레벨", "player_level", 1),
-            ("스탯 포인트", "player_stat_points", 5),
-            ("소지금", "player_gold", 1000),
-            ("아이템 생성", "item_spawn", 1),
-            ("전리품 생성", "loot_spawn", 1),
-            ("생성 수량", "cheat_spawn_qty", 1),
-            ("공격력", "atk", 10),
-            ("방어력", "def", 10),
-            ("최대체력", "hp", 100),
-            ("최대마나", "mana", 100)
+        credits_lines = [
+            "기획/개발: RPG Maker AI",
+            "도움: Antigravity",
+            "총괄 프로듀서: " + player_name,
+            "",
+            "플레이해주셔서 감사합니다!"
         ]
+        for i, line in enumerate(credits_lines):
+            draw_text(line, WIDTH//2, 250 + i*40, WHITE, center=True, small=True)
+            
+        draw_text("[Z] 처음으로 돌아가기", WIDTH//2, HEIGHT - 80, GREY, center=True, small=True)
         
-        # 입력 모드 초기화
-        if 'cheat_input_mode' not in globals(): globals()['cheat_input_mode'] = False
-        if 'cheat_input_buffer' not in globals(): globals()['cheat_input_buffer'] = ""
-        if 'cheat_spawn_qty' not in globals(): globals()['cheat_spawn_qty'] = 1
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                player_level = 1
+                player_exp = 0
+                player_gold = 200
+                player_job = "초보자"
+                player_inventory = []
+                player_equipment = {"weapon": None, "armor": None, "accessory": None}
+                quest_manager = QuestManager()
+                player.x, player.y = player_start_pos
+                state = STATE_NAME
+                player_name = ""
+
+    # ----------------------------------------
+    # ESC 메뉴
+    # ----------------------------------------
+    elif state == STATE_ESC_MENU:
+        # 배경 약간 어둡게 (반투명 효과는 없으므로 검정 배경에 박스)
+        pygame.draw.rect(screen, (20, 20, 30), (WIDTH//2 - 150, 100, 300, 400))
+        pygame.draw.rect(screen, WHITE, (WIDTH//2 - 150, 100, 300, 400), 3)
         
-        # 목록 준비
-        item_keys = list(ITEM_DB.keys())
-        if 'cheat_item_idx' not in globals(): globals()['cheat_item_idx'] = 0
+        draw_text("메뉴", WIDTH//2, 130, YELLOW, center=True)
         
-        all_loots = []
-        for m in MONSTER_DB.values():
-            if m['loot_item'] not in [x['name'] for x in all_loots]:
-                all_loots.append({"name": m['loot_item'], "price": m['loot_price'], "desc": "상점에 판매 가능"})
-            if 'rare_loot' in m and m['rare_loot'] not in [x['name'] for x in all_loots]:
-                all_loots.append({"name": m['rare_loot'], "price": m.get('rare_price', 1000), "desc": "매우 귀한 전리품"})
-        if 'cheat_loot_idx' not in globals(): globals()['cheat_loot_idx'] = 0
+        esc_items = ["환경 설정", "게임 저장", "타이틀로", "게임 종료"]
+        for i, item in enumerate(esc_items):
+            color = YELLOW if i == esc_menu_idx else WHITE
+            draw_text(item, WIDTH//2, 220 + i*60, color, center=True)
+            if i == esc_menu_idx:
+                draw_text("▶", WIDTH//2 - 100, 220 + i*60, YELLOW, center=True)
+
+        draw_text("[Z] 선택  [X/ESC] 닫기", WIDTH//2, 460, GREY, center=True, small=True)
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == KEY_UP:
+                    esc_menu_idx = (esc_menu_idx - 1) % len(esc_items)
+                    menu_nav_timer = now
+                elif event.key == KEY_DOWN:
+                    esc_menu_idx = (esc_menu_idx + 1) % len(esc_items)
+                    menu_nav_timer = now
+                elif event.key == KEY_ACTION_1: # Z
+                    sel = esc_items[esc_menu_idx]
+                    if sel == "환경 설정":
+                        state_before_settings = STATE_ESC_MENU
+                        state = STATE_SETTINGS
+                    elif sel == "게임 저장":
+                        state_before_save_load = STATE_ESC_MENU
+                        save_load_mode = "save"
+                        state = STATE_SAVE_LOAD
+                    elif sel == "타이틀로":
+                        state = STATE_TITLE
+                    elif sel == "게임 종료":
+                        running = False
+                    menu_nav_timer = now
+                elif event.key in [KEY_ACTION_2, KEY_ESC] and not skip_esc_this_frame:
+                    state = state_before_esc
+                    menu_nav_timer = now
+
+    # ----------------------------------------
+    # 세이브/로드 슬롯 선택
+    # ----------------------------------------
+    elif state == STATE_SAVE_LOAD:
+        screen.fill(BG_SELECT)
+        title = "저장할 슬롯을 선택하세요" if save_load_mode == "save" else "불러올 슬롯을 선택하세요"
+        draw_text(title, WIDTH//2, 80, YELLOW, center=True)
         
-        # UI 배치 설정
-        start_x = 100
+        for i in range(1, 4):
+            rect = pygame.Rect(WIDTH//2 - 200, 150 + (i-1)*100, 400, 80)
+            is_sel = (save_slot_index == i-1)
+            color_bg = (60, 60, 80) if is_sel else (30, 30, 45)
+            pygame.draw.rect(screen, color_bg, rect)
+            pygame.draw.rect(screen, WHITE if is_sel else GREY, rect, 2)
+            
+            info = get_slot_info(i)
+            draw_text(f"슬롯 {i}", rect.x + 20, rect.y + 15, YELLOW, small=True)
+            draw_text(info, rect.x + 20, rect.y + 45, WHITE, small=True)
+
+        draw_text("[방향키] 선택, [Z] 확정, [X] 취소", WIDTH//2, HEIGHT - 50, GREY, center=True, small=True)
+
+        for event in events:
+            if event.type == pygame.KEYDOWN and now - menu_nav_timer > 300:
+                if event.key == KEY_UP:
+                    save_slot_index = (save_slot_index - 1) % 3
+                    # menu_nav_timer = now # 키다운 방식이므로 연속 입력 방지 타이머 불필요하지만, 입력 간격 조절 원하면 추가
+                elif event.key == KEY_DOWN:
+                    save_slot_index = (save_slot_index + 1) % 3
+                elif event.key == KEY_ACTION_1: # 확정 (Z)
+                    target_slot = save_slot_index + 1
+                    if save_load_mode == "save":
+                        trigger_save(target_slot)
+                        state = state_before_save_load
+                    else: # load
+                        if load_game(target_slot):
+                            state = STATE_TOWN
+                        else:
+                            # 로드 실패 알림 등
+                            pass
+                    menu_nav_timer = now
+                elif event.key == KEY_ACTION_2: # 취소 (X)
+                    state = state_before_save_load
+                    menu_nav_timer = now
+
+    # 퀘스트 로그 화면
+    elif state == STATE_QUEST_LOG:
+        screen.fill(BG_SELECT)
+        draw_text("★ 퀘스트 목록 ★", WIDTH//2, 50, YELLOW, center=True)
+        
+        # 메인 퀘스트
+        mq_id = quest_manager.main_quest_id
+        q_data = QUEST_DB.get(mq_id)
         start_y = 120
-        line_h = 40
+        if q_data:
+            draw_text("[메인 퀘스트]", 50, start_y, GREEN, small=True)
+            draw_text(f"제목: {q_data['name']}", 70, start_y + 30, WHITE, small=True)
+            draw_text(f"설명: {q_data['desc']}", 70, start_y + 60, (200, 200, 200), small=True)
+            
+            # 진행도
+            status = "진행 중"
+            if mq_id in quest_manager.active_quests:
+                curr = quest_manager.active_quests[mq_id]["current_count"]
+                req = q_data["objective"]["count"]
+                status = f"진행도: {curr}/{req}"
+                if curr >= req: status += " (완료 가능)"
+            elif q_data["objective"]["type"] == "talk":
+                status = "NPC와 대화하세요"
+            
+            draw_text(status, 70, start_y + 90, YELLOW, small=True)
+            
+        # 서브 퀘스트
+        sub_y = start_y + 150
+        draw_text("[서브 퀘스트]", 50, sub_y, (100, 200, 255), small=True)
+        count = 0
+        for qid, progress in quest_manager.active_quests.items():
+            if QUEST_DB[qid]["type"] == "SUB":
+                q_data = QUEST_DB[qid]
+                draw_text(f"- {q_data['name']}: {progress['current_count']}/{q_data['objective']['count']}", 70, sub_y + 30 + count*30, WHITE, small=True)
+                count += 1
+        if count == 0:
+            draw_text("진행 중인 서브 퀘스트가 없습니다.", 70, sub_y + 30, GREY, small=True)
+
+        draw_text("[X] 닫기 [Q] 닫기", WIDTH//2, HEIGHT - 50, WHITE, center=True, small=True)
         
-        for i, (label, var, inc) in enumerate(cheat_options):
-            color = WHITE
-            is_selected = (i == cheat_select_idx)
-            
-            if is_selected:
-                color = YELLOW
-                draw_text(">", start_x - 30, start_y + i * line_h, YELLOW)
-            
-            if var == "item_spawn":
-                item_data = ITEM_DB[item_keys[cheat_item_idx]]
-                rarity = item_data.get("rarity", "커먼")
-                rarity_color = get_rarity_color(rarity)
-                val_text = f"[{rarity}] {item_data['name']} (Z획득)"
-                if is_selected: color = rarity_color if not cheat_input_mode else RED
-            elif var == "loot_spawn":
-                loot_data = all_loots[cheat_loot_idx]
-                rarity = "언커먼" if "귀한" in loot_data['desc'] else "커먼"
-                val_text = f"[{rarity}] {loot_data['name']} (Z획득)"
-                if is_selected: color = get_rarity_color(rarity) if not cheat_input_mode else RED
-            else:
-                if is_selected and cheat_input_mode:
-                    val_text = f"입력 중: {cheat_input_buffer}_"
-                    color = RED
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key in [KEY_ACTION_2, pygame.K_q]:
+                    state = state_before_quest_log
+                    menu_nav_timer = now
+    
+    # Q키 핫키 추가 (전역 이벤트 루프 루프 외부에서 처리하거나 내부에서 처리)
+    # 이미 위에서 처리했으므로 중복 제거하거나 통합
+    if state in [STATE_TOWN, STATE_FIELD, STATE_QUEST_LOG]:
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
+                if state == STATE_QUEST_LOG:
+                    state = state_before_quest_log
                 else:
-                    if var in ["player_level", "player_gold", "player_stat_points", "cheat_spawn_qty"]:
-                        val_text = str(globals()[var])
-                    else:
-                        val_text = str(player_stats[var])
-            
-            draw_text(f"{label}: {val_text}", start_x, start_y + i * line_h, color)
-
-        guide = "[↑/↓] 이동 [←/→] 조절 [Z] 생성 [Enter] 직접입력 [F1] 닫기"
-        draw_text(guide, WIDTH//2, HEIGHT - 50, GREY, center=True, small=True)
-
-        if cheat_input_mode:
-            # 직접 입력 처리
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN: # 확정
-                        if cheat_input_buffer.isdigit():
-                            new_val = int(cheat_input_buffer)
-                            opt = cheat_options[cheat_select_idx]
-                            var = opt[1]
-                            if var in ["player_level", "player_gold", "player_stat_points", "cheat_spawn_qty"]:
-                                globals()[var] = new_val
-                            elif var in player_stats:
-                                diff = new_val - player_stats[var]
-                                player_stats[var] = new_val
-                                if var == "hp": player_max_hp += diff; player_hp = min(player_hp, player_max_hp)
-                                if var == "mana": player_max_mana += diff; player_mana = min(player_mana, player_max_mana)
-                        cheat_input_mode = False
-                        cheat_input_buffer = ""
-                        menu_nav_timer = now
-                    elif event.key == pygame.K_BACKSPACE:
-                        cheat_input_buffer = cheat_input_buffer[:-1]
-                    elif event.unicode.isdigit():
-                        cheat_input_buffer += event.unicode
-        else:
-            # 일반 메뉴 조작
-            if now - menu_nav_timer > 100:
-                if keys[KEY_UP]:
-                    cheat_select_idx = (cheat_select_idx - 1) % len(cheat_options)
-                    menu_nav_timer = now
-                elif keys[KEY_DOWN]:
-                    cheat_select_idx = (cheat_select_idx + 1) % len(cheat_options)
-                    menu_nav_timer = now
-                
-                opt = cheat_options[cheat_select_idx]
-                var = opt[1]
-                inc = opt[2]
-                
-                if keys[KEY_RIGHT]:
-                    if var == "item_spawn": cheat_item_idx = (cheat_item_idx + 1) % len(item_keys)
-                    elif var == "loot_spawn": cheat_loot_idx = (cheat_loot_idx + 1) % len(all_loots)
-                    elif var in ["player_level", "player_gold", "player_stat_points", "cheat_spawn_qty"]:
-                        globals()[var] += inc
-                        if var == "player_level": globals()["player_stat_points"] += 3
-                    else:
-                        player_stats[var] += inc
-                        if var == "hp": player_max_hp += inc; player_hp += inc
-                        if var == "mana": player_max_mana += inc; player_mana += inc
-                    menu_nav_timer = now
-                elif keys[KEY_LEFT]:
-                    if var == "item_spawn": cheat_item_idx = (cheat_item_idx - 1) % len(item_keys)
-                    elif var == "loot_spawn": cheat_loot_idx = (cheat_loot_idx - 1) % len(all_loots)
-                    elif var in ["player_level", "player_gold", "player_stat_points", "cheat_spawn_qty"]:
-                        globals()[var] = max(1 if var=="cheat_spawn_qty" else 0, globals()[var] - inc)
-                    else:
-                        player_stats[var] = max(1, player_stats[var] - inc)
-                        if var == "hp": player_max_hp = max(1, player_max_hp - inc); player_hp = min(player_hp, player_max_hp)
-                        if var == "mana": player_max_mana = max(1, player_max_mana - inc); player_mana = min(player_mana, player_max_mana)
-                    menu_nav_timer = now
-
-            # 상호작용
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN:
-                        opt = cheat_options[cheat_select_idx]
-                        if opt[1] not in ["item_spawn", "loot_spawn"]:
-                            cheat_input_mode = True
-                            cheat_input_buffer = ""
-                            menu_nav_timer = now
-                    elif event.key == KEY_ACTION_1:
-                        opt = cheat_options[cheat_select_idx]
-                        if opt[1] == "item_spawn":
-                            item_key = item_keys[cheat_item_idx]
-                            item_data = ITEM_DB[item_key].copy()
-                            add_item_to_inventory(item_data, cheat_spawn_qty)
-                            menu_nav_timer = now + 150
-                        elif opt[1] == "loot_spawn":
-                            loot_data = all_loots[cheat_loot_idx].copy()
-                            loot_data["type"] = "misc"
-                            add_item_to_inventory(loot_data, cheat_spawn_qty)
-                            menu_nav_timer = now + 150
-
-
-
-    # 퀘스트 표시 (전투 제외)
-    if state in [STATE_TOWN, STATE_FIELD, STATE_DIALOG, STATE_SELECT_MAP]:
-        draw_text(quest_text, 10, 10, WHITE)
+                    if quest_manager.active_quests:
+                        state_before_quest_log = state
+                        state = STATE_QUEST_LOG
+                menu_nav_timer = now
 
     # 화면 스케일링 및 출력
     scaled_surface = pygame.transform.scale(screen, (scaled_width, scaled_height))
