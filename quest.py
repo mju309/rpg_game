@@ -5,9 +5,10 @@ class QuestManager:
     def __init__(self):
         self.main_quest_id = 1  # 1번부터 시작
         self.completed_quests = set()
-        self.active_quests = {} # {quest_id: {"current_count": 0}} 서브 전용이 아닌, 진행 중인 모든 퀘스트(주로 서브)
-        self.quest_display_text = "" # 화면에 표시될 텍스트
-        self.allow_sub_quests = False # 서브 퀘스트 활성화 여부
+        self.active_quests = {} # {quest_id: {"current_count": 0}}
+        self.dynamic_quests = {} # {quest_id: quest_oject} - AI 생성 퀘스트 데이터 보관용
+        self.quest_display_text = "" 
+        self.allow_sub_quests = False 
 
     def get_quest_info(self, quest_id):
         return QUEST_DB.get(quest_id)
@@ -98,6 +99,14 @@ class QuestManager:
                     progress["current_count"] += 1
                     updated = True
         
+        # 동적 퀘스트 체크
+        for qid, q_data in self.dynamic_quests.items():
+            obj = q_data["objective"]
+            if obj["type"] == "kill" and obj["target"].strip() == monster_name.strip():
+                if q_data.get("current_count", 0) < obj["count"]:
+                    q_data["current_count"] = q_data.get("current_count", 0) + 1
+                    updated = True
+        
         if updated:
             self.update_display_text()
 
@@ -149,8 +158,17 @@ class QuestManager:
         else:
             self.quest_display_text = "Main: 모든 퀘스트 완료"
 
-        # 서브 퀘스트 표시 (최대 1~2개?)
-        pass
+        # 서브/동적 퀘스트 표시 (최대 2개 추가)
+        extra_lines = []
+        for qid, q_data in self.dynamic_quests.items():
+            obj = q_data["objective"]
+            curr = q_data.get("current_count", 0)
+            req = obj["count"]
+            status = f" ({curr}/{req})" if curr < req else " (완료 가능)"
+            extra_lines.append(f"Board: {q_data['name']}{status}")
+            
+        if extra_lines:
+            self.quest_display_text += "\n" + "\n".join(extra_lines[:2])
 
     def get_npc_dialog(self, npc_name, player_name, player_level, player_job, player_inventory, player_equipment, item_db_ref):
         """
@@ -322,6 +340,7 @@ class QuestManager:
             "main_quest_id": self.main_quest_id,
             "completed_quests": list(self.completed_quests), # JSON 저장을 위해 리스트로 변환
             "active_quests": self.active_quests,
+            "dynamic_quests": self.dynamic_quests,
             "allow_sub_quests": self.allow_sub_quests
         }
 
@@ -331,5 +350,62 @@ class QuestManager:
         self.main_quest_id = state_data.get("main_quest_id", 1)
         self.completed_quests = set(state_data.get("completed_quests", []))
         self.active_quests = state_data.get("active_quests", {})
+        self.dynamic_quests = state_data.get("dynamic_quests", {})
         self.allow_sub_quests = state_data.get("allow_sub_quests", False)
         self.update_display_text()
+
+    def add_dynamic_quest(self, quest_object):
+        qid = quest_object["id"]
+        # 최대 3개까지만 수락 가능하게 제한 (선택 사항)
+        if len(self.dynamic_quests) >= 3:
+            return False, "이미 많은 의뢰를 맡고 있습니다."
+        
+        if qid not in self.dynamic_quests:
+            quest_object["current_count"] = 0
+            self.dynamic_quests[qid] = quest_object
+            self.update_display_text()
+            return True, "의뢰를 수락했습니다."
+        return False, "이미 진행 중인 의뢰입니다."
+
+    def is_dynamic_quest_completable(self, qid, inventory):
+        if qid not in self.dynamic_quests: return False
+        
+        q_data = self.dynamic_quests[qid]
+        obj = q_data["objective"]
+        
+        if obj["type"] == "kill":
+            return q_data.get("current_count", 0) >= obj["count"]
+        elif obj["type"] == "collect":
+            target = obj["target"]
+            needed = obj["count"]
+            has_cnt = sum(it.get("count", 1) for it in inventory if it["name"] == target)
+            return has_cnt >= needed
+        elif obj["type"] == "talk":
+            return True
+        return False
+
+    def complete_dynamic_quest(self, qid, inventory):
+        if not self.is_dynamic_quest_completable(qid, inventory):
+            return None
+            
+        q_data = self.dynamic_quests.pop(qid)
+        
+        # 수집물 소모
+        if q_data["objective"]["type"] == "collect":
+            target = q_data["objective"]["target"]
+            needed = q_data["objective"]["count"]
+            rem_needed = needed
+            for it in inventory[:]:
+                if it["name"] == target:
+                    c = it.get("count", 1)
+                    if c >= rem_needed:
+                        it["count"] = c - rem_needed
+                        rem_needed = 0
+                        if it.get("count", 0) <= 0: inventory.remove(it)
+                    else:
+                        rem_needed -= c
+                        inventory.remove(it)
+                    if rem_needed <= 0: break
+                    
+        self.update_display_text()
+        return q_data["rewards"]

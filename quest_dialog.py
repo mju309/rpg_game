@@ -107,8 +107,8 @@ def get_dialog(type, **kwargs):
     # 3. NPC 기본 대사 (퀘스트 없을 때)
     # ------------------------------------------------
     elif type == "NPC_DEFAULT":
-        if npc_name == "경비병":
-            return ["마을의 평화는 우리가 지킨다.", "수상한 자가 보이면 신고하게."]
+        if npc_name == "게시판":
+            return ["게시판에 새로운 의뢰가 가득합니다.", "마을의 소식들을 확인해 보세요."]
         elif npc_name == "대장장이":
             return ["어이, 장비 강화하러 왔나?", "내 실력은 확실하지."]
         elif npc_name == "상점":

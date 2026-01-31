@@ -3,6 +3,10 @@ import random
 import string
 import sys
 import os
+import battle_system_turn_based as battle_sys
+import dynamic_quest_logic as dq_logic
+import dynamic_quest_data as dq_data
+import ai_module
 import json
 from quest_data import QUEST_DB
 from quest import QuestManager
@@ -74,6 +78,7 @@ GREEN = (0, 255, 100)
 RED = (255, 60, 60)
 YELLOW = (255, 255, 0)
 GREY = (70, 70, 70)
+CYAN = (0, 255, 255)
 
 BG_NAME = BLACK
 BG_TOWN = (139, 69, 19)
@@ -226,6 +231,7 @@ STATE_SAVE_LOAD = "save_load" # 세이브/로드 선택 화면
 STATE_TITLE = "title" # 타이틀 화면
 STATE_ESC_MENU = "esc_menu" # ESC 메뉴
 STATE_HIDDEN_JOB = "hidden_job" # AI 히든 직업 결정 화면
+STATE_BOARD = "board"
 
 # 전투 시퀀스 전술 단계
 BATTLE_STEP_CRITICAL = 100 # 크리티컬 바 단계
@@ -264,6 +270,15 @@ title_select_idx = 0 # 타이틀 메뉴 선택 인덱스
 esc_menu_idx = 0 # ESC 메뉴 선택 인덱스
 state_before_settings = STATE_TOWN # 설정 전 상태 저장용
 state_before_esc = STATE_TITLE # ESC 메뉴 진입 전 상태 저장용
+
+# 게시판 및 AI 관련 변수
+board_quests = []
+board_select_idx = 0
+board_msg = ""
+board_msg_timer = 0
+board_ai_comment = ""
+hidden_job_requested = False
+hidden_job_result = None
 
 # 소울 싱크로나이즈 (크리티컬 시스템) 관련 변수
 crit_ring_radius = 200 # 시작 반경
@@ -381,6 +396,47 @@ JOB_DB = {
     "사수": {
         "base": {"hp": 180, "atk": 28, "def": 15, "mana": 200, "agi": 25, "crit": 22},
         "skills": ["애로우 블로우", "더블 샷", "크리티컬 샷", "포커스", "에로우 샤워", "스나이핑"]
+    },
+    # --- 히든 직업 (2차/전설 직업) ---
+    "버서커": {
+        "base": {"hp": 600, "atk": 95, "def": 5, "mana": 100, "agi": 30, "crit": 40},
+        "skills": ["피의 분노", "공포의 일격", "불사의 외침", "대지 가르기"]
+    },
+    "지휘관": {
+        "base": {"hp": 400, "atk": 55, "def": 45, "mana": 300, "agi": 20, "crit": 15},
+        "skills": ["돌격 명령", "전술 재정비", "함성", "최후의 지원"]
+    },
+    "현자": {
+        "base": {"hp": 250, "atk": 80, "def": 25, "mana": 800, "agi": 25, "crit": 20},
+        "skills": ["고대의 지혜", "마나 폭풍", "정신 초월", "궁극의 마법"]
+    },
+    "학살자": {
+        "base": {"hp": 450, "atk": 85, "def": 40, "mana": 200, "agi": 40, "crit": 35},
+        "skills": ["약점 포착", "보스 레이드", "피의 세례", "사냥의 시간"]
+    },
+    "연금술사": {
+        "base": {"hp": 350, "atk": 60, "def": 35, "mana": 500, "agi": 30, "crit": 25},
+        "skills": ["포션 강화", "맹독 투척", "황금 변환", "현자의 돌"]
+    },
+    "닌자": {
+        "base": {"hp": 280, "atk": 75, "def": 20, "mana": 250, "agi": 80, "crit": 60},
+        "skills": ["인술: 화룡", "그림자 이동", "암살 의도", "심장 찌르기"]
+    },
+    "대장장이": {
+        "base": {"hp": 550, "atk": 70, "def": 65, "mana": 200, "agi": 15, "crit": 20},
+        "skills": ["무기 담금질", "모루 타격", "명작의 탄생", "강화의 대가"]
+    },
+    "수호자": {
+        "base": {"hp": 700, "atk": 40, "def": 85, "mana": 250, "agi": 10, "crit": 10},
+        "skills": ["절대 방어", "수호의 영역", "방패 돌진", "불멸의 방패"]
+    },
+    "갬블러": {
+        "base": {"hp": 300, "atk": 65, "def": 30, "mana": 400, "agi": 50, "crit": 70},
+        "skills": ["올인", "운명의 주사위", "잭팟", "강제 크리티컬"]
+    },
+    "방랑가": {
+        "base": {"hp": 420, "atk": 68, "def": 42, "mana": 350, "agi": 35, "crit": 32},
+        "skills": ["다재다능", "유량의 노래", "적응력", "모험가의 정신"]
     }
 
 }
@@ -414,6 +470,19 @@ SKILLS = {
     "크리티컬 샷": {"mana": 30, "dmg_rate": 1.5, "crit_bonus": 55, "name": "크리티컬 샷"},
     "포커스": {"mana": 25, "dmg_rate": 0, "name": "포커스", "desc": "명중률 및 공격력 상승"},
     "에로우 샤워": {"mana": 55, "dmg_rate": 2.5, "name": "에로우 샤워", "desc": "화살 비를 퍼부음"},
+    "스나이핑": {"mana": 70, "dmg_rate": 4.5, "name": "스나이핑", "crit_bonus": 40},
+
+    # --- 히든 스킬 ---
+    "피의 분노": {"mana": 0, "dmg_rate": 3.5, "name": "피의 분노", "desc": "HP 비례 강력한 타격"},
+    "돌격 명령": {"mana": 50, "dmg_rate": 1.5, "name": "돌격 명령", "desc": "파티원 전체 공격 연출"},
+    "고대의 지혜": {"mana": 100, "dmg_rate": 0, "name": "고대의 지혜", "desc": "마나 회복 및 주문력 폭증"},
+    "보스 레이드": {"mana": 60, "dmg_rate": 4.0, "name": "보스 레이드", "desc": "보스 적에게 2배 데미지"},
+    "포션 강화": {"mana": 30, "dmg_rate": 1.2, "name": "포션 강화", "desc": "전투 중 포션 효율 증대"},
+    "인술: 화룡": {"mana": 65, "dmg_rate": 3.8, "name": "인술: 화룡", "desc": "적 전체 화염 타격"},
+    "무기 담금질": {"mana": 45, "dmg_rate": 2.2, "name": "무기 담금질", "desc": "일시적으로 장비 스탯 대폭 상승"},
+    "절대 방어": {"mana": 70, "dmg_rate": 0, "name": "절대 방어", "desc": "완전 무적 상태 돌입 (1턴)"},
+    "올인": {"mana": 100, "dmg_rate": 7.7, "name": "올인", "desc": "확률적으로 엄청난 피해 또는 소량의 피해"},
+    "다재다능": {"mana": 40, "dmg_rate": 2.5, "name": "다재다능", "desc": "랜덤한 타 직업 스탯 버프"}
 }
 # 동료 전용 스킬 데이터베이스
 COMPANION_SKILL_DB = {
@@ -473,7 +542,7 @@ npc_job = pygame.Rect(640, 120, 40, 40) # 전직관 (우상단 구역)
 npc_store = pygame.Rect(120, 480, 40, 40) # 상점 (좌하단 구역)
 npc_blacksmith = pygame.Rect(640, 480, 40, 40) # 대장장이 (우하단 구역)
 npc_recruit = pygame.Rect(520, 480, 40, 40) # 용병단장 (우하단 구역)
-npc_guard = pygame.Rect(280, 80, 40, 40)  # 경비병 (북쪽 입구 근처)
+npc_board = pygame.Rect(280, 80, 40, 40)
 
 # ----------------------------------------
 # 이미지 스프라이트 설정 (40x40)
@@ -501,7 +570,6 @@ load_sprite("chief", "chief.png", GREEN)
 load_sprite("job", "job.png", (150, 0, 150))
 load_sprite("store", "store.png", (200, 200, 0))
 load_sprite("blacksmith", "blacksmith.png", (60, 60, 65))
-load_sprite("guard", "guard.png", (50, 50, 200))
 load_sprite("recruit", "recruit.png", (100, 50, 150))
 
 # 몬스터 스프라이트 (이미지 파일 없을 때의 기본 색상)
@@ -773,191 +841,66 @@ def draw_text_box(text, x, y, w, h, color_bg=GREY, color_text=WHITE, small=False
 
 def draw_text(text, x, y, color=WHITE, center=False, small=False):
     f = font_small if small else font
-    img = f.render(text, True, color)
+    text_surface = f.render(str(text), True, color)
+    rect = text_surface.get_rect()
     if center:
-        rect = img.get_rect(center=(x, y))
-        screen.blit(img, rect)
+        rect.center = (x, y)
     else:
-        screen.blit(img, (x, y))
+        rect.topleft = (x, y)
+    screen.blit(text_surface, rect)
 
-def draw_soul_sync():
-    global crit_ring_radius, crit_ring_speed, crit_target_radius
+def wrap_text(text, font_obj, max_width):
+    if not text: return []
+    paragraphs = text.split('\n')
+    final_lines = []
     
-    # 화면 중앙
-    cx, cy = WIDTH//2, HEIGHT//2 - 50
-    
-    # 1. 중앙 가이드 라인 (타겟 코어)
-    pygame.draw.circle(screen, (60, 60, 60), (cx, cy), crit_target_radius + 15, 2) # Outer Guide
-    pygame.draw.circle(screen, YELLOW, (cx, cy), crit_target_radius, 3) # Perfect Core
-    
-    # 2. 수축하는 링 (Soul Ring)
-    # 시간에 따라 반경 감소
-    crit_ring_radius -= crit_ring_speed
-    
-    # 링이 코어보다 작아지면 다시 크게 (실패 방지 루프 - 실제로는 도중에 누름)
-    if crit_ring_radius < 10:
-        crit_ring_radius = 220
-        
-    # 링 색상 결정 (목표에 가까워질수록 밝아짐)
-    dist = abs(crit_ring_radius - crit_target_radius)
-    ring_color = WHITE
-    if dist < 10: ring_color = YELLOW
-    elif dist < 30: ring_color = GREEN
-    
-    pygame.draw.circle(screen, ring_color, (cx, cy), int(crit_ring_radius), 4)
-    
-    # 사이버네틱 효과 (십자 가이드)
-    pygame.draw.line(screen, (100, 100, 100), (cx - 10, cy), (cx + 10, cy), 2)
-    pygame.draw.line(screen, (100, 100, 100), (cx, cy - 10), (cx, cy + 10), 2)
-
-
-
-def add_damage_label(text, x, y, color=RED, is_crit=False):
-    global damage_labels, screen_shake_time, screen_shake_intensity, hit_flash_time
-    # 약간의 위치 랜덤성
-    rx = x + random.randint(-30, 30)
-    ry = y + random.randint(-20, 20)
-    
-    # 임팩트 효과 트리거
-    screen_shake_time = 10 # 프레임 수 (조금 줄임)
-    screen_shake_intensity = 6 if is_crit else 3 # 강도 조절
-    
-    # 공격 이펙트 추가 (Procedural Effect)
-    add_effect("slash", rx, ry, color)
-    if is_crit:
-        add_effect("spark", rx, ry, YELLOW)
-
-    damage_labels.append({
-        "text": str(text),
-        "x": rx,
-        "y": ry,
-        "start_y": ry,
-        "timer": pygame.time.get_ticks(),
-        "color": color,
-        "is_crit": is_crit
-    })
-
-def add_effect(type, x, y, color):
-    global particles
-    if type == "slash":
-        # 베기 이펙트 (선이 그어지는 연출)
-        particles.append({
-            "type": "slash", "x": x, "y": y, "timer": 15, "max_timer": 15,
-            "angle": random.randint(0, 360), "color": color, "size": 100
-        })
-    elif type == "spark":
-        # 튀는 불꽃
-        for _ in range(8):
-            particles.append({
-                "type": "particle", 
-                "x": x, "y": y, 
-                "vx": random.uniform(-5, 5), "vy": random.uniform(-5, 5),
-                "timer": 20, "color": color, "size": random.randint(3, 6)
-            })
-
-def draw_effects(off_x, off_y):
-    global particles
-    for p in particles[:]:
-        p["timer"] -= 1
-        if p["timer"] <= 0:
-            particles.remove(p)
+    for para in paragraphs:
+        if not para:
+            final_lines.append("")
             continue
             
-        if p["type"] == "slash":
-            # 베기: 선이 빠르게 지나감
-            progress = 1 - (p["timer"] / p["max_timer"])
-            start_offset = -50 + progress * 100
-            end_offset = start_offset + 40
+        # 한글/한자 등 공백 없는 언어를 고려하여 글자 단위로 체크할 수도 있지만, 
+        # 일단 단어 단위로 시도하고 단어가 너무 길면 글자 단위로 쪼개는 방식 제안
+        words = para.split(' ')
+        current_line = ""
+        
+        for word in words:
+            # 단어 자체가 이미 max_width를 넘는 경우 (한글 등에서 공백 없이 길게 쓸 때)
+            w_word, _ = font_obj.size(word)
+            if w_word > max_width:
+                # 글자 단위로 쪼개기
+                for char in word:
+                    test_line = current_line + char
+                    w, _ = font_obj.size(test_line)
+                    if w <= max_width:
+                        current_line = test_line
+                    else:
+                        if current_line: final_lines.append(current_line)
+                        current_line = char
+                current_line += " " # 단어 끝에 공백 추가 시도
+            else:
+                test_line = (current_line + " " + word).strip()
+                w, _ = font_obj.size(test_line)
+                if w <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line: final_lines.append(current_line)
+                    current_line = word
+                    
+        if current_line:
+            final_lines.append(current_line.strip())
             
-            # 각도 적용
-            rad = math.radians(p["angle"])
-            c, s = math.cos(rad), math.sin(rad)
-            
-            p1 = (p["x"] + c * start_offset + off_x, p["y"] + s * start_offset + off_y)
-            p2 = (p["x"] + c * end_offset + off_x,   p["y"] + s * end_offset + off_y)
-            
-            pygame.draw.line(screen, WHITE, p1, p2, 5) # Core styling
-            pygame.draw.line(screen, p["color"], p1, p2, 3) # Inner color
+    return final_lines
 
-        elif p["type"] == "particle":
-            p["x"] += p["vx"]
-            p["y"] += p["vy"]
-            pygame.draw.circle(screen, p["color"], (int(p["x"] + off_x), int(p["y"] + off_y)), p["size"])
-
-def draw_damage_labels():
-    global damage_labels
-    now = pygame.time.get_ticks()
-    DURATION = 1200
-    
-    for label in damage_labels[:]:
-        elapsed = now - label["timer"]
-        if elapsed > DURATION:
-            damage_labels.remove(label)
-            continue
-        
-        offset_y = (elapsed / DURATION) * 80
-        curr_y = label["start_y"] - offset_y
-        
-        # 폰트 크기 키우기 (메인 폰트보다 크게)
-        font_to_use = font # 기본 폰트 사용하되, 스케일링으로 처리 or 그냥 큰 폰트 객체 생성
-        
-        # 텍스트 렌더링
-        txt_surf = font_to_use.render(label["text"], True, label["color"])
-        # 크기 확대 (1.5배)
-        scale = 2.0 if label["is_crit"] else 1.5
-        w = int(txt_surf.get_width() * scale)
-        h = int(txt_surf.get_height() * scale)
-        scaled_surf = pygame.transform.scale(txt_surf, (w, h))
-        
-        # 외곽선 (검은색 그림자 효과)
-        shadow_surf = font_to_use.render(label["text"], True, BLACK)
-        shadow_scaled = pygame.transform.scale(shadow_surf, (w, h))
-        
-        # 위치
-        draw_x = label["x"] - w//2
-        draw_y = curr_y - h//2
-        
-        # 외곽선 그리기 (4방향)
-        for dx, dy in [(-2,0), (2,0), (0,-2), (0,2)]:
-            screen.blit(shadow_scaled, (draw_x + dx, draw_y + dy))
-            
-        screen.blit(scaled_surf, (draw_x, draw_y))
-
-def reset_battle(enemy_data=None):
-    global battle_select, battle_timer, battle_messages, battle_step, battle_turn_count
-    global player_battle_buffs, enemy_battle_debuffs, battle_mana_shield, battle_companion_idx, battle_taunt_target
-    global battle_enemy, is_boss_battle, damage_labels
-    damage_labels = [] # 이전 전투 잔상 제거
-    battle_select = 0
-    battle_timer = 0
-    battle_messages = []
-    battle_step = 0
-    battle_turn_count = 0
-    battle_companion_idx = 0
-    battle_taunt_target = -1 # 도발 대상 초기화
-    player_battle_buffs = {}
-    enemy_battle_debuffs = {}
-    battle_mana_shield = False
-    battle_turn_count = 1
-    
-    # 버프/디버프 초기화 (효과명: 지속턴수)
-    player_battle_buffs = {}
-    enemy_battle_debuffs = {}
-    
-    if enemy_data:
-        battle_enemy = enemy_data.copy()
-        battle_enemy["max_hp"] = battle_enemy["hp"]
-        # 치명타 확률이 데이터에 없으면 기본값 0 설정 (KeyError 방지)
-        if "crit" not in battle_enemy:
-            battle_enemy["crit"] = 0
-        is_boss_battle = enemy_data.get("is_boss", False)
-        # 선공 결정 (민첩 비교)
-        battle_step = 0 if player_stats["agi"] >= battle_enemy["agi"] else 4
-    else:
-        # 기본값 (안전장치)
-        battle_enemy = {"name": "Unknown", "hp": 10, "max_hp": 10, "atk": 1, "def": 0, "agi": 0, "crit": 0, "exp": 0}
-        battle_step = 0
-        is_boss_battle = False
+def draw_grid():
+    # 40x40 단위로 격자 그리기
+    grid_color = (60, 40, 30) # 바닥보다 약간 어두운 색상
+    # 가로선
+    for y in range(0, HEIGHT + 1, 40):
+        pygame.draw.line(screen, grid_color, (0, y), (WIDTH, y), 1)
+    # 세로선
+    for x in range(0, WIDTH + 1, 40):
+        pygame.draw.line(screen, grid_color, (x, 0), (x, HEIGHT), 1)
 
 def handle_companion_attack():
     global battle_messages
@@ -1094,6 +1037,7 @@ def close_stat_menu(apply_changes):
 def draw_town_objects():
     # 1. 마을 배경 및 도로 그리기
     screen.fill((120, 70, 40)) # 흙 바닥 (도로 외 구역)
+    draw_grid() # 격자 표시
     
     # 가로 도로 (중앙)
     pygame.draw.rect(screen, (150, 100, 60), (0, 240, WIDTH, 120))
@@ -1224,37 +1168,19 @@ def draw_town_objects():
     elif is_near(npc_blacksmith):
         draw_text("[Z] 대장장이", npc_blacksmith.x, npc_blacksmith.y - 30, YELLOW, small=True)
 
-    # 경비병 (퀘스트 중개소)
-    draw_sprite(screen, "guard", npc_guard)
+    # 게시판 (AI 기반 동적 퀘스트 전용)
+    pygame.draw.rect(screen, (150, 75, 0), npc_board)
+    pygame.draw.rect(screen, WHITE, npc_board, 2)
+    board_status_color = YELLOW
     
-    # 1. 완료 가능한 퀘스트 확인 (보고 우선)
-    guard_report = False
-    for qid, progress in quest_manager.active_quests.items():
-        if QUEST_DB[qid]["end_npc"] == "경비병":
-             obj = QUEST_DB[qid]["objective"]
-             if obj["type"] == "kill" and progress["current_count"] >= obj["count"]:
-                 guard_report = True; break
-    
-    # 2. 새로 수락 가능한 서브 퀘스트 확인 (가이드)
-    guard_new = False
-    for qid, sq in QUEST_DB.items():
-        if sq["start_npc"] == "경비병" and sq["type"] == "SUB":
-             if not quest_manager.is_quest_completed(qid) and not quest_manager.is_quest_active(qid):
-                  if player_level >= sq["req_level"]:
-                       guard_new = True; break
-    
-    # 3. 진행 중인 퀘스트 확인
-    guard_active = any(QUEST_DB[qid]["end_npc"] == "경비병" or QUEST_DB[qid]["start_npc"] == "경비병" 
-                       for qid in quest_manager.active_quests)
-
-    if guard_report:
-        draw_text("[Z] 임무 보고", npc_guard.x - 10, npc_guard.y - 30, YELLOW, small=True)
-    elif guard_new:
-        draw_text("[Z] 새로운 임무", npc_guard.x - 10, npc_guard.y - 30, YELLOW, small=True)
-    elif guard_active:
-        draw_text("[Z] 경비병", npc_guard.x, npc_guard.y - 30, YELLOW, small=True)
-    elif is_near(npc_guard):
-        draw_text("[Z] 경비병", npc_guard.x, npc_guard.y - 30, YELLOW, small=True)
+    # 만약 완료 가능한 동적 퀘스트가 하나라도 있다면 느낌표 표시
+    for qid in quest_manager.dynamic_quests:
+        if quest_manager.is_dynamic_quest_completable(qid, player_inventory):
+            board_status_color = GREEN
+            draw_text("!", npc_board.x + 15, npc_board.y - 50, GREEN, center=True)
+            break
+            
+    draw_text("게시판", npc_board.x, npc_board.y - 30, board_status_color, small=True)
 
     # 용병단장 (상시 이용 가능)
     draw_sprite(screen, "recruit", npc_recruit)
@@ -1277,6 +1203,56 @@ def draw_town_objects():
         draw_text("[Z] 용병단", npc_recruit.x, npc_recruit.y - 30, YELLOW, small=True)
 
 
+
+
+def spawn_monsters(map_idx):
+    """
+    해당 맵 인덱스에 맞는 몬스터를 스폰하여 field_monsters 리스트를 채웁니다.
+    """
+    global field_monsters
+    field_monsters = []
+    
+    map_info = MAP_DATA[map_idx]
+    
+    # 등장 가능한 몬스터 키 목록
+    available_monsters = []
+    
+    for key, m_data in MONSTER_DB.items():
+        # 보스는 제외하고 일반 몬스터만 스폰 (보스는 별도 로직)
+        if m_data.get("is_last"): continue
+        if key in [0,1,2,3,4,5,6,7]: continue # 보스 ID 제외 (정수형 키)
+
+        # 맵 인덱스가 일치하거나, 해당 맵 권장 레벨 범위에 맞는 몬스터
+        if m_data.get("map_idx") == map_idx:
+            available_monsters.append(key)
+    
+    # 맵별 스폰 수량
+    spawn_count_min = 3
+    spawn_count_max = 6
+    
+    if map_idx == 7: # 마왕성 등
+        spawn_count_min = 1
+        spawn_count_max = 1
+        # 마왕 스폰 (고정)
+        mob_data = BOSS_DB[7].copy() # 마왕
+        m_rect = pygame.Rect(WIDTH//2 - 20, HEIGHT//2 - 60, 40, 40)
+        field_monsters.append({
+            "rect": m_rect, "data": mob_data, "name": mob_data["name"],
+            "dir": [0,0], "timer": 0, "key": "demon_king" 
+        })
+    elif available_monsters:
+        count = random.randint(spawn_count_min, spawn_count_max)
+        for _ in range(count):
+            mob_key = random.choice(available_monsters)
+            mob_data = MONSTER_DB[mob_key].copy()
+            rx = random.randrange(40, WIDTH - 40, 40)
+            ry = random.randrange(40, HEIGHT - 80, 40)
+            m_rect = pygame.Rect(rx, ry, 40, 40)
+            monster_obj = {
+                "rect": m_rect, "data": mob_data, "name": mob_data["name"],
+                "dir": [0,0], "timer": 0, "key": mob_key
+            }
+            field_monsters.append(monster_obj)
 
 # ----------------------------------------
 # 메인 루프
@@ -1428,6 +1404,8 @@ while running:
         screen.fill(BG_TOWN)
         # draw_grid() # 격자 제거
         draw_town_objects()
+        # 플레이어 좌표 표시
+        draw_text(f"좌표: ({player.x//40}, {player.y//40})", 10, HEIGHT - 60, WHITE, small=True)
         
         # 전직관 (레벨 10 이상이고 아직 Novice일 때만? 아니면 항상?)
         # 10레벨 이상일 때 표시
@@ -1492,9 +1470,17 @@ while running:
                     not temp_rect.colliderect(npc_store) and 
                     not temp_rect.colliderect(npc_blacksmith) and 
                     not temp_rect.colliderect(npc_recruit) and 
-                    not temp_rect.colliderect(npc_guard)):
+                    not temp_rect.colliderect(npc_board)):
                     player.x, player.y = next_x, next_y
                     player_move_timer = now
+
+                    # 맵 상단 이동 시 사냥터 선택 화면으로 이동
+                    if player.y <= 10:
+                        state = STATE_SELECT_MAP
+                        select_map_index = 0
+                        # 플레이어 좌표를 약간 아래로 조정하여 반복 진입 방지
+                        player.y = 20  
+                        player_move_timer = now + 500
 
         # 촌장 대화 (Interaction)
         if (abs(player.x - npc.x) <= 40 and abs(player.y - npc.y) <= 40):
@@ -1563,15 +1549,26 @@ while running:
                          dialog_page = 0
                     else:
                          # 기존 전직 로직
-                        if player_level < 10:
+                        if player_level < 20:
                              state = STATE_DIALOG
-                             current_dialog = ["아직 전직할 준비가 되지 않았네.", "10레벨을 달성하고 오게."]
+                             current_dialog = ["아직 전직할 준비가 되지 않았네.", "20레벨을 달성하고 오게."]
                              dialog_page = 0
                         elif player_job == "초보자":
+                             # 첫 번째 전직 (20레벨)
                              state = STATE_JOB_SELECT
+                             menu_nav_timer = now
+                        elif player_level >= 50 and player_job in ["전사", "마법사", "사수", "도적"]:
+                             # 두 번째 히든 전직 (50레벨)
+                             state = STATE_HIDDEN_JOB
+                             globals()['hidden_job_requested'] = False
+                             globals()['hidden_job_result'] = None
+                             menu_nav_timer = now
                         else:
+                             msg = f"이미 {player_job}의 길을 걷고 있군."
+                             if player_level < 50:
+                                 msg += " 50레벨이 되면 히든 전직에 도전할 수 있네."
                              state = STATE_DIALOG
-                             current_dialog = [f"이미 {player_job}의 길을 걷고 있군."]
+                             current_dialog = [msg]
                              dialog_page = 0
                     break
 
@@ -1597,51 +1594,21 @@ while running:
                         blacksmith_select_idx = 0
                     break
 
-        # 경비병 대화
-        if (abs(player.x - npc_guard.x) <= 40 and abs(player.y - npc_guard.y) <= 40):
-            
+        # 마을 게시판 상호작용
+        if (abs(player.x - npc_board.x) <= 40 and abs(player.y - npc_board.y) <= 40):
             for event in events:
                 if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
                     menu_nav_timer = now
-                    d_lines, r_info = quest_manager.get_npc_dialog("경비병", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
+                    # 목록이 비어있을 때만 새로 생성
+                    if not board_quests:
+                         draw_text("의뢰를 분석 중입니다...", WIDTH//2, HEIGHT//2, YELLOW, center=True)
+                         pygame.display.flip() # 강제 업데이트
+                         board_quests = dq_logic.generate_dynamic_quests(player_level, analytics.get_state(), MONSTER_DB, MAP_DATA, player_gold, player_name)
                     
-                    if r_info["gold"] > 0: player_gold += r_info["gold"]
-                    if r_info["exp"] > 0: player_exp += r_info["exp"]
-                    
-                    state = STATE_DIALOG
-                    current_dialog = d_lines
-                    dialog_page = 0
+                    state = STATE_BOARD
+                    board_select_idx = 0
+                    board_msg = ""
                     break
-
-        # 용병단장 대화
-        if (abs(player.x - npc_recruit.x) <= 40 and abs(player.y - npc_recruit.y) <= 40):
-            
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    menu_nav_timer = now
-                    d_lines, r_info = quest_manager.get_npc_dialog("용병단장", player_name, player_level, player_job, player_inventory, player_equipment, ITEM_DB)
-                    
-                    has_event = (r_info["gold"] > 0 or r_info["exp"] > 0 or len(r_info["items_added"]) > 0 or 
-                                 (len(d_lines) > 0 and "수락" in d_lines[-1]) or (len(d_lines) > 0 and "완료" in d_lines[-1]))
-
-                    if has_event:
-                         if r_info["gold"] > 0: player_gold += r_info["gold"]
-                         if r_info["exp"] > 0: player_exp += r_info["exp"]
-                         state = STATE_DIALOG
-                         current_dialog = d_lines
-                         dialog_page = 0
-                    else:
-                        state = STATE_RECRUIT
-                        recruit_select_idx = 0
-                    break
-
-        # 위로 나가면 사냥터 선택 이동
-        if player.y < 0:
-            state = STATE_SELECT_MAP
-            select_map_index = 0
-            player.x, player.y = player_town_pos # 살짝 아래로 조정하여 바로 다시 나가지 않게? 아니면 그냥 위치 리셋
-            # 여기서는 플레이어 위치를 마을 상단에 유지하되, 상태만 바꿈. 
-            # 실제로 필드로 이동할때 좌표를 player_field_pos로 바꿈.
 
     # ----------------------------------------
     # 대화
@@ -1675,6 +1642,190 @@ while running:
     # ----------------------------------------
     # 사냥터 선택
     # ----------------------------------------
+
+    elif state == STATE_BOARD:
+        screen.fill(BG_TOWN)
+        draw_town_objects()
+        # 보드 UI
+        pygame.draw.rect(screen, (20, 20, 20), (15, 60, 770, 520))
+        pygame.draw.rect(screen, WHITE, (15, 60, 770, 520), 2)
+        draw_text("=== 마을 게시판 (나를 위한 의뢰) ===", WIDTH//2, 90, YELLOW, center=True)
+        draw_text("X: 닫기  Z: 수락/완료  R: 리롤 (100G)  ←/→: 선택", 30, 550, GREY, small=True)
+
+        quests_to_show = board_quests[:3]
+        for i, q in enumerate(quests_to_show):
+            # 여백을 일정하게 조정 (좌/우/카드 사이 간격을 모두 20으로 맞춤)
+            card_w = 230
+            card_h = 420
+            qx = 35 + i * 250
+            qy = 110
+            
+            color = WHITE
+            if i == board_select_idx: 
+                color = YELLOW
+                pygame.draw.rect(screen, (40, 40, 40), (qx-5, qy-5, card_w, card_h))
+            
+            # 1. 퀘스트 이름 (Top)
+            title_lines = wrap_text(f"[{q['name']}]", font_small, card_w - 20)
+            for j, t_line in enumerate(title_lines[:2]):
+                draw_text(t_line, qx + card_w//2, qy + 10 + j*22, color, center=True, small=True)
+            
+            # 진행 상태
+            title_offset = len(title_lines) * 22
+            is_active = q['id'] in quest_manager.dynamic_quests
+            is_done = quest_manager.is_dynamic_quest_completable(q['id'], player_inventory)
+            
+            status_txt = ""
+            if is_active:
+                curr = quest_manager.dynamic_quests[q['id']].get('current_count', 0)
+                req = q['objective']['count']
+                status_txt = f"진행: {curr}/{req}"
+                if is_done: status_txt = "[완료 가능!]"
+            
+            if status_txt:
+                draw_text(status_txt, qx + card_w//2, qy + 15 + title_offset, GREEN if is_done else WHITE, center=True, small=True)
+            
+            # 2. 퀘스트 설명 (Middle)
+            desc_lines = wrap_text(q['desc'], font_small, card_w - 20)
+            desc_y = qy + 75
+            for j, line in enumerate(desc_lines[:4]):
+                draw_text(line, qx + 10, desc_y + j*20, WHITE, small=True)
+            
+            # 3. 보상 (Reward Section)
+            r_y = qy + 165
+            draw_text(f"GOLD: {q['rewards']['gold']}G", qx + 10, r_y, (255, 215, 0), small=True)
+            draw_text(f"EXP  : {q['rewards']['exp']}", qx + 10, r_y + 20, (0, 255, 255), small=True)
+
+            # 4. 난이도 (Difficulty Section)
+            d_y = qy + 230
+            stars = "★" * q['star'] + "☆" * (5 - q['star'])
+            draw_text(f"난이도: {stars}", qx + 10, d_y, YELLOW, small=True)
+            
+            # 5. 특수조건 (Special Condition Section)
+            if q.get('modifiers'):
+                mod_y = qy + 270
+                draw_text("── 특수 조건 ──", qx + card_w//2, mod_y, GREY, center=True, small=True)
+                mod_y += 25
+                for mod in q['modifiers'][:2]:
+                    # 텍스트 잘림 방지: 전체 텍스트를 카드 너비에 맞춰 줄바꿈
+                    m_name = mod.get("name", "조건")
+                    # (효과) 부분을 명확히 다음 줄로 보내기 위해 \n 삽입
+                    raw_desc = mod['desc']
+                    if " (" in raw_desc:
+                        mod_text = f"[{m_name}] " + raw_desc.replace(" (", "\n(")
+                    else:
+                        mod_text = f"[{m_name}] {raw_desc}"
+                        
+                    m_lines = wrap_text(mod_text, font_small, card_w - 20)
+                    
+                    for m_line in m_lines[:4]: # 최대 4줄까지 허용
+                        draw_text(m_line, qx + 10, mod_y, YELLOW, small=True)
+                        mod_y += 18
+                    
+                    mod_y += 2 # 다음 조건과의 간격
+            
+            pygame.draw.rect(screen, (80, 80, 80), (qx-5, qy-5, card_w, card_h), 1)
+
+        if board_msg and now - board_msg_timer < 2000:
+            draw_text(board_msg, WIDTH//2, 540, GREEN, center=True, small=True)
+
+        if now - menu_nav_timer > 150:
+            num_q = min(3, len(board_quests))
+            if num_q > 0:
+                if keys[KEY_LEFT]: board_select_idx = (board_select_idx - 1) % num_q; menu_nav_timer = now
+                if keys[KEY_RIGHT]: board_select_idx = (board_select_idx + 1) % num_q; menu_nav_timer = now
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == KEY_ACTION_2: state = STATE_TOWN; menu_nav_timer = now; board_msg = ""
+                
+                # 리롤 기능
+                if event.key == pygame.K_r:
+                    reroll_cost = 100
+                    if player_gold >= reroll_cost:
+                        player_gold -= reroll_cost
+                        board_quests = dq_logic.generate_dynamic_quests(player_level, analytics.data, MONSTER_DB, MAP_DATA, player_gold, player_name)
+                        board_select_idx = 0
+                        board_msg = f"의뢰 목록을 갱신했습니다. (-{reroll_cost}G)"
+                        board_msg_timer = now
+                    else:
+                        board_msg = f"골드가 부족합니다! ({reroll_cost}G 필요)"
+                        board_msg_timer = now
+                if event.key == KEY_ACTION_1:
+                    sel_q = board_quests[board_select_idx]
+                    if sel_q['id'] in quest_manager.dynamic_quests:
+                        if quest_manager.is_dynamic_quest_completable(sel_q['id'], player_inventory):
+                            rew = quest_manager.complete_dynamic_quest(sel_q['id'], player_inventory)
+                            if rew:
+                                player_gold += rew['gold']
+                                player_exp += rew['exp']
+                                board_msg = "의뢰 완료! 보상을 획득했습니다."
+                                board_msg_timer = now
+                                trigger_level_up_check()
+                    else:
+                        ok, msg = quest_manager.add_dynamic_quest(sel_q)
+                        board_msg = msg
+                        board_msg_timer = now
+                    menu_nav_timer = now
+
+    elif state == STATE_HIDDEN_JOB:
+        screen.fill(BG_BATTLE)
+        draw_text("=== AI 전직 분석 ===", WIDTH//2, 100, YELLOW, center=True)
+        
+        if not globals().get('hidden_job_requested', False):
+            draw_text("플레이 데이터를 분석하여 최적의 직업을 결정하고 있습니다...", WIDTH//2, HEIGHT//2, WHITE, center=True, small=True)
+            # 여기서는 비동기 처리가 어렵지만 일단 한번만 호출
+            globals()['hidden_job_result'] = ai_module.get_hidden_job_analysis(player_name, analytics.get_state(), player_level, player_stats)
+            globals()['hidden_job_requested'] = True
+            menu_nav_timer = now
+            
+        if globals().get('hidden_job_result'):
+            res = globals()['hidden_job_result']
+            
+            # 🔹 [직업 판정 결과]
+            draw_text("🔹 [직업 판정 결과]", WIDTH//2, 140, CYAN, center=True, small=True)
+            draw_text(f"선택 직업: {res['job']}", WIDTH//2, 180, GREEN, center=True)
+            
+            # 판정 근거 요약
+            sy = 230
+            draw_text("■ 판정 근거 요약", 100, sy, YELLOW, small=True)
+            for i, ev in enumerate(res.get('evidence', [])):
+                draw_text(f" - {ev}", 120, sy + 25 + i * 20, WHITE, small=True)
+            
+            # AI 해설
+            draw_text("■ AI 해설", 100, 320, YELLOW, small=True)
+            draw_text_box(res.get('ai_comment', ''), 100, 345, 600, 60, color_bg=(30,30,30), small=True)
+            
+            # 대안 선택지
+            if res.get('alternative'):
+                draw_text(f"💡 대안: {res['alternative']}", 100, 420, GREY, small=True)
+            
+            draw_text("[Z] 전직 수락  [X] 취소 (일반 전직으로)", WIDTH//2, 480, WHITE, center=True, small=True)
+            
+            for event in events:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == KEY_ACTION_1:
+                        # 정해진 히든 직업으로 전직 및 스탯 보정
+                        selected_job = res['job']
+                        # 기존 직업(주로 1차 직업 또는 공백)과의 스탯 차이 반영
+                        old_base = JOB_DB.get(player_job, JOB_DB["초보자"])["base"]
+                        new_base = JOB_DB[selected_job]["base"]
+                        
+                        for key in STAT_ORDER:
+                            player_stats[key] += (new_base[key] - old_base[key])
+                            
+                        player_job = selected_job
+                        player_max_hp = player_stats["hp"]
+                        player_hp = player_max_hp
+                        player_max_mana = player_stats["mana"]
+                        player_mana = player_max_mana
+                        
+                        state = STATE_TOWN
+                        menu_nav_timer = now
+                    elif event.key == KEY_ACTION_2:
+                        # 일반 전직 화면으로 이동
+                        state = STATE_JOB_SELECT
+                        menu_nav_timer = now
     elif state == STATE_SELECT_MAP:
         screen.fill(BG_LEVELUP)
         draw_text("사냥터를 선택하세요", WIDTH//2, 100, WHITE, center=True)
@@ -1698,10 +1849,9 @@ while running:
         pygame.draw.rect(screen, bg_color, (box_x, box_y, box_width, box_height))
         pygame.draw.rect(screen, WHITE, (box_x, box_y, box_width, box_height), 3)
 
-        draw_text(map_name, WIDTH//2, box_y + 80, WHITE, center=True)
-        
-        info_color = GREEN if player_level >= min_lv else RED
-        draw_text(f"권장 레벨: {min_lv}", WIDTH//2, box_y + 120, info_color, center=True, small=True)
+        # 맵 정보 텍스트
+        draw_text(map_name, WIDTH//2, box_y + 40, WHITE, center=True)
+        draw_text(f"권장 레벨: {min_lv}", WIDTH//2, box_y + 80, YELLOW if player_level >= min_lv else RED, center=True, small=True)
 
         if now - menu_nav_timer > 150:
             if keys[KEY_LEFT]:
@@ -1720,52 +1870,32 @@ while running:
         if keys[KEY_ACTION_1]:
             if now - menu_nav_timer > 200:
                 menu_nav_timer = now
-                if player_level >= min_lv:
-                    state = STATE_FIELD
-                    current_map_index = select_map_index
-                    player.x, player.y = player_field_pos
-                    
-                    # 몬스터 생성 (1~3마리)
-                    # 이전 몬스터 초기화
-                    field_monsters = [] 
-                    
-                    available_monsters = [k for k, v in MONSTER_DB.items() if v.get("map_idx") == current_map_index]
-                    
-                    spawn_count_min = 1
-                    spawn_count_max = 4
-
-                    # 튜토리얼(초반 퀘스트)에서는 숲에서 슬라임만 나오도록 강제
-                    # 퀘스트ID 1번이 슬라임 처치 퀘스트임
-                    if current_map_index == 0 and quest_manager.main_quest_id <= 1:
-                         available_monsters = ["slime"]
-                         spawn_count_max = 1 # 튜토리얼은 1마리만
-                    
-                    if current_map_index == 7:
-                        # 마왕성 특수 룰: 바로 마왕(최종 보스) 소환
-                        mob_data = BOSS_DB[7].copy()
-                        mob_data["is_boss"] = True
-                        m_rect = pygame.Rect(WIDTH//2 - 20, HEIGHT//2 - 60, 40, 40)
-                        field_monsters.append({
-                            "rect": m_rect, "data": mob_data, "name": mob_data["name"],
-                            "dir": [0,0], "timer": 0, "key": "demon_king" 
-                        })
-                    elif available_monsters:
-                        count = random.randint(spawn_count_min, spawn_count_max)
-                        for _ in range(count):
-                            mob_key = random.choice(available_monsters)
-                            mob_data = MONSTER_DB[mob_key].copy()
-                            rx = random.randrange(40, WIDTH - 40, 40)
-                            ry = random.randrange(40, HEIGHT - 80, 40)
-                            m_rect = pygame.Rect(rx, ry, 40, 40)
-                            monster_obj = {
-                                "rect": m_rect, "data": mob_data, "name": mob_data["name"],
-                                "dir": [0,0], "timer": 0, "key": mob_key
-                            }
-                            field_monsters.append(monster_obj)
-
-                else:
-                    msg_text = "레벨이 부족합니다!"
+                
+                # 레벨 제한 완화: 도전 가능하도록 변경
+                if player_level < min_lv:
+                    analytics.log("high_lv_challenge_count", "high_lv_challenge_count", 1)
+                    # 경고 메시지 (선택 사항)
+                    msg_text = "위험합니다! 권장 레벨보다 낮습니다."
                     msg_timer = now
+                
+                state = STATE_FIELD
+                current_map_index = select_map_index
+                player.x, player.y = player_field_pos
+                
+                # 몬스터 생성 (스폰 함수 활용)
+                spawn_monsters(current_map_index)
+                
+                # 튜토리얼(초반 퀘스트)에서는 슬라임 1마리 보장
+                if current_map_index == 0 and quest_manager.main_quest_id <= 1:
+                     # 숲, 초기
+                     field_monsters = []
+                     # 강제 스폰
+                     mob_data = MONSTER_DB["slime"].copy()
+                     field_monsters.append({
+                        "rect": pygame.Rect(WIDTH//2 - 20, HEIGHT//2, 40, 40), 
+                        "data": mob_data, "name": mob_data["name"],
+                        "dir": [0,0], "timer": 0, "key": "slime"
+                     })
         
         if msg_text and now - msg_timer < 1000:
             draw_text(msg_text, WIDTH//2, HEIGHT - 150, RED, center=True)
@@ -1778,12 +1908,14 @@ while running:
     elif state == STATE_FIELD:
         # 현재 맵 배경색 사용
         screen.fill(MAP_DATA[current_map_index]["color"])
-        # draw_grid() # 격자 제거
+        draw_grid() # 격자 표시
         draw_sprite(screen, "player", player, facing=player_facing)
         
         # 맵 이름 표시 (상단 중앙)
         draw_text(MAP_DATA[current_map_index]["name"], WIDTH//2, 20, WHITE, center=True, small=True)
         draw_text("[S] 저장", 10, HEIGHT - 30, GREY, small=True)
+        # 플레이어 좌표 표시
+        draw_text(f"좌표: ({player.x//40}, {player.y//40})", 10, HEIGHT - 60, WHITE, small=True)
 
         if save_msg_text and now - save_msg_timer < 2000:
             draw_text(save_msg_text, WIDTH//2, HEIGHT//2, YELLOW, center=True)
@@ -1845,9 +1977,22 @@ while running:
                         if player_level < MAP_DATA[current_map_index].get("min_lv", 0):
                             analytics.log("combat", "high_lv_challenge_count")
                             
-                        reset_battle(mob["data"])
+                        player_battle_buffs = {}
+                        
+                        # 동적 퀘스트 모디파이어 주입
+                        current_modifiers = []
+                        mob_name = mob["data"]["name"]
+                        for qid, q_data in quest_manager.dynamic_quests.items():
+                            if q_data["objective"]["target"] == mob_name or q_data["objective"]["target"] in mob_name:
+                                if q_data.get("modifiers"):
+                                    current_modifiers.extend(q_data["modifiers"])
+                        
+                        battle_data = mob["data"].copy()
+                        battle_data["modifiers"] = current_modifiers
+                        
+                        battle_sys.reset_battle(battle_data)
+                        battle_sys.battle_target_mob = mob
                         state = STATE_BATTLE
-                        battle_target_mob = mob
         # 플레이어 이동 (그리드)
         if now - player_move_timer > PLAYER_MOVE_INTERVAL:
             next_x, next_y = player.x, player.y
@@ -1887,11 +2032,10 @@ while running:
         # 숲 아래로 가면 마을로
         if player.y >= HEIGHT:
             state = STATE_TOWN
-            player.x, player.y = 400, 10 # 마을 위쪽 입구에서 나타남
-            # 퀘스트 완료 상태로 복귀했다면 자동 대화 X, 촌장에게 가야함
-            pass
-            
-            monster_respawn_timer = 0
+            # 유저 요청: x좌표 유지, y좌표만 40으로
+            player.y = 40 
+            current_map_index = 0
+            field_monsters = []
             
         else:
              # 몹이 없으면 리스폰 타이머 작동
@@ -1953,773 +2097,7 @@ while running:
     # 전투
     # ----------------------------------------
     elif state == STATE_BATTLE:
-        # global screen_shake_time, hit_flash_time # Removed to fix SyntaxError
-        
-        # 스크린 쉐이크 계산
-        off_x, off_y = 0, 0
-        if screen_shake_time > 0:
-            off_x = random.randint(-screen_shake_intensity, screen_shake_intensity)
-            off_y = random.randint(-screen_shake_intensity, screen_shake_intensity)
-            screen_shake_time -= 1
-            
-        screen.fill(BG_BATTLE)
-        
-        # 모든 전투 오브젝트에 오프셋 적용
-        slime_rect = pygame.Rect(50 + off_x, 50 + off_y, 80, 80)
-        player_rect = pygame.Rect(600 + off_x, 300 + off_y, 80, 80)
-        pygame.draw.rect(screen, RED, slime_rect)
-        pygame.draw.rect(screen, BLUE, player_rect)
-        
-        # 이펙트 그리기 (캐릭터 위)
-        draw_effects(off_x, off_y)
-        
-        draw_text(f"{battle_enemy['name']} HP: {battle_enemy['hp']}/{battle_enemy['max_hp']}", slime_rect.x, slime_rect.y - 25)
-        draw_text(f"{player_name} HP: {player_hp}", player_rect.x, player_rect.y - 25)
-
-        msg_box_y = 400
-        pygame.draw.rect(screen, BLACK, (50, msg_box_y, 700, 100))
-        pygame.draw.rect(screen, WHITE, (50, msg_box_y, 700, 100), 1)
-        
-        # 히트 플래시 (맞았을 때 흰색 반짝임)
-        if hit_flash_time > 0:
-            # 전체 화면 혹은 타격 부위에 플래시
-            # 여기서는 연출 극대화를 위해 전체 박스 살짝 덮음
-            flash_surf = pygame.Surface((WIDTH, HEIGHT))
-            flash_surf.fill(WHITE)
-            flash_surf.set_alpha(100)
-            screen.blit(flash_surf, (0,0))
-            hit_flash_time -= 1
-        
-        # 데미지 수치 출력
-        draw_damage_labels()
-        
-        # 크리티컬 바 출력
-        if battle_step == BATTLE_STEP_CRITICAL:
-            draw_soul_sync()
-        
-        # 메시지 시퀀스 연출
-        if battle_messages:
-            # 첫 번째 메시지 (기본 공격/스킬명)
-            draw_text(battle_messages[0], 70, msg_box_y + 15, WHITE)
-            
-            # 0.5초(500ms) 뒤 두 번째 메시지(급소/효과 등) 출력
-            if len(battle_messages) > 1 and now - battle_timer > 500:
-                draw_text(battle_messages[1], 70, msg_box_y + 45, YELLOW, small=True)
-            
-            # 1.0초(1000ms) 뒤 세 번째 메시지 출력 (있는 경우)
-            if len(battle_messages) > 2 and now - battle_timer > 1000:
-                draw_text(battle_messages[2], 70, msg_box_y + 70, YELLOW, small=True)
-        
-        # 용병 사용 안내
-        if player_party and battle_step == 0:
-            draw_text("Tip: 내 턴이 끝나면 영입한 용병들의 명령을 내릴 수 있습니다.", WIDTH//2, 385, GREEN, center=True, small=True)
-
-        # 메뉴
-        for i, m in enumerate(menu_list):
-            x = 50 + i * 180
-            y = 520
-            color = WHITE
-            border = WHITE
-            if i == battle_select:
-                color = YELLOW
-                border = YELLOW
-            pygame.draw.rect(screen, border, (x-10, y-10, 150, 60), 2)
-            draw_text(m, x, y, color)
-
-        # 전투 로직
-        # 전투 로직
-        if battle_step == 0:  # 메뉴 선택
-            if now - menu_nav_timer > 150: # 150ms 간격
-                if keys[KEY_LEFT]:
-                    battle_select = max(0, battle_select - 1)
-                    menu_nav_timer = now
-                elif keys[KEY_RIGHT]:
-                    battle_select = min(3, battle_select + 1)
-                    menu_nav_timer = now
-
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    if now - menu_nav_timer > 300:
-                        menu_nav_timer = now
-                        if battle_select == 0: # 공격
-                            # 소울 싱크 단계로 진입
-                            battle_step = BATTLE_STEP_CRITICAL
-                            crit_ring_radius = 220 # 원의 시작 크기
-                            menu_nav_timer = now
-                        elif battle_select == 1: # 스킬 (메뉴 진입)
-                            battle_step = 10 # 스킬 선택 모드
-                            battle_skill_select_idx = 0
-                            menu_nav_timer = now 
-                        
-                        elif battle_select == 2: # 아이템
-                             battle_step = 20 # 아이템 선택 모드
-                             battle_item_select_idx = 0
-                             menu_nav_timer = now
-
-                        elif battle_select == 3: # 도망
-                            if random.random() < 0.5:
-                                battle_messages = ["도망에 성공했다!"]
-                                battle_step = 5 # 도망 성공 대기 상태
-                                battle_timer = now
-                            else:
-                                battle_messages = ["도망에 실패했다!"]
-                                battle_step = 1 # 적 턴으로 넘어감
-                                battle_timer = now
-
-        elif battle_step == BATTLE_STEP_CRITICAL:
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    # 거리 계산 (중앙 타겟 반경과의 차이)
-                    dist = abs(crit_ring_radius - crit_target_radius)
-                    
-                    if dist <= 8:
-                        crit_result = "PERFECT"
-                        crit_multiplier = 2.2
-                        analytics.log("action", "perfect_hits")
-                    elif dist <= 25:
-                        crit_result = "GREAT"
-                        crit_multiplier = 1.6
-                    elif dist <= 50:
-                        crit_result = "GOOD"
-                        crit_multiplier = 1.3
-                    else:
-                        crit_result = "MISSED"
-                        crit_multiplier = 1.0
-                        analytics.log("action", "miss_hits")
-
-                    # 데미지 계산 및 적용
-                    atk_bonus = 1.3 if "공격력" in player_battle_buffs else 1.0
-                    crit_bonus = 20 if "크리티컬" in player_battle_buffs else 0
-                    
-                    # 빈사 상태 공격 체크
-                    if player_hp / player_max_hp <= 0.2:
-                        analytics.log("combat", "low_hp_attack_count")
-
-                    hd, hc = calculate_damage(player_stats["atk"] * atk_bonus * crit_multiplier, 
-                                           battle_enemy["def"], 
-                                           player_stats["crit"] + crit_bonus)
-                    battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                    
-                    # 데미지 라벨 추가 (비주얼 강조)
-                    is_p = (crit_result == "PERFECT")
-                    add_damage_label(hd, 90, 80, YELLOW if is_p else RED, is_crit=is_p)
-                    
-                    battle_messages = [f"{crit_result}!"] # 데미지 텍스트 제거
-                    if hc or crit_result == "PERFECT":
-                         battle_messages.append(random.choice(CRIT_SCRIPTS))
-                    
-                    battle_step = 1
-                    battle_timer = now
-                    menu_nav_timer = now
-
-        elif battle_step == BATTLE_STEP_DEATH:
-            draw_text("전투에서 패배했습니다...", WIDTH//2, HEIGHT//2 - 20, RED, center=True)
-            draw_text("[Z] 마을로 돌아가기", WIDTH//2, HEIGHT//2 + 20, WHITE, center=True, small=True)
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    # 복귀 성능 측정 (사망 후 복귀까지 걸린 시간 합산)
-                    death_time = analytics.data.get("last_death_time", now)
-                    analytics.log("combat", "retry_speed_sum", now - death_time)
-                    analytics.log("combat", "retry_count")
-                    
-                    # 상태 회복 및 강제 이동
-                    player_hp = int(player_max_hp) # 100% 체력으로 부활
-                    state = STATE_TOWN
-                    player.x, player.y = player_start_pos
-                    menu_nav_timer = now
-
-        elif battle_step == 10: # 스킬 선택 화면
-            pygame.draw.rect(screen, BLACK, (50, HEIGHT - 150, WIDTH - 100, 140))
-            draw_text(f"스킬 선택 (MP: {player_mana}/{player_max_mana}) (X: 취소)", 70, HEIGHT - 140, GREY, small=True)
-            
-            my_skills = JOB_DB[player_job]["skills"]
-            
-            # 스킬 목록 표시
-            for i, s_name in enumerate(my_skills):
-                s_data = SKILLS.get(s_name, {"mana": 0, "name": s_name})
-                color = YELLOW if i == battle_skill_select_idx else WHITE
-                draw_text(f"{s_name} (MP {s_data['mana']})", 80, HEIGHT - 110 + i * 30, color)
-            
-            if now - menu_nav_timer > 150:
-                if keys[KEY_UP]:
-                    battle_skill_select_idx = (battle_skill_select_idx - 1) % len(my_skills)
-                    menu_nav_timer = now
-                elif keys[KEY_DOWN]:
-                    battle_skill_select_idx = (battle_skill_select_idx + 1) % len(my_skills)
-                    menu_nav_timer = now
-            
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == KEY_ACTION_2: # 취소
-                        if now - menu_nav_timer > 200:
-                            battle_step = 0
-                            menu_nav_timer = now
-                    
-                    if event.key == KEY_ACTION_1: # 선택
-                        if now - menu_nav_timer > 300:
-                            menu_nav_timer = now
-                            skill_name = my_skills[battle_skill_select_idx]
-                            skill_data = SKILLS.get(skill_name)
-                            
-                            if player_mana >= skill_data["mana"]:
-                                player_mana -= skill_data["mana"]
-                                
-                                # 스킬 성향 로깅
-                                if player_job == "마법사":
-                                    analytics.log("skills", "magic")
-                                elif player_job == "전사":
-                                    analytics.log("skills", "physical")
-                                elif player_job == "사수":
-                                    analytics.log("skills", "physical")
-                                else:
-                                    analytics.log("skills", "physical") # 기본
-
-                                # 빈사 상태 스킬 공격 체크
-                                if player_hp / player_max_hp <= 0.2:
-                                    analytics.log("combat", "low_hp_attack_count")
-                                
-                                # 공통 효과 처리
-                                effect_msgs = []
-                                
-                                # 1. 버프/특수 효과 적용 (공격 전)
-                                if skill_name == "아이언 바디":
-                                    player_battle_buffs["방어력"] = 4
-                                    effect_msgs.append("방어력이 대폭 상승했습니다!")
-                                elif skill_name == "워 크라이":
-                                    player_battle_buffs["공격력"] = 4
-                                    effect_msgs.append("전투 의지가 솟구칩니다! (공격력 상승)")
-                                elif skill_name == "헤이스트":
-                                    player_battle_buffs["민첩"] = 5
-                                    effect_msgs.append("몸이 가벼워졌습니다! (민첩 상승)")
-                                elif skill_name == "매직 실드":
-                                    battle_mana_shield = True
-                                    effect_msgs.append("마나의 장벽이 생성되었습니다!")
-                                elif skill_name == "포커스":
-                                    player_battle_buffs["공격력"] = 3
-                                    player_battle_buffs["크리티컬"] = 3
-                                    effect_msgs.append("집중력이 높아집니다!")
-                                elif skill_name == "독 바르기":
-                                    player_battle_buffs["독무기"] = 5
-                                    effect_msgs.append("무기에 독을 발랐습니다!")
-
-                                # 2. 공격 처리
-                                dmg_rate = skill_data.get("dmg_rate", 0)
-                                if dmg_rate > 0:
-                                    hits = skill_data.get("hits", 1)
-                                    total_dmg = 0
-                                    any_crit = False
-                                    
-                                    # 버프 적용된 공격력/크리
-                                    atk_bonus = 1.3 if "공격력" in player_battle_buffs else 1.0
-                                    crit_bonus = skill_data.get("crit_bonus", 0)
-                                    if "크리티컬" in player_battle_buffs: crit_bonus += 20
-                                    
-                                    ignore_def = skill_name == "가드 브레이크"
-                                    
-                                    for _ in range(hits):
-                                        lv = skill_levels.get(skill_name, 1)
-                                        lv_bonus = (lv - 1) * 0.1
-                                        
-                                        d, c = calculate_damage(player_stats["atk"] * (dmg_rate + lv_bonus) * atk_bonus, 
-                                                               battle_enemy["def"], 
-                                                               player_stats["crit"] + crit_bonus,
-                                                               ignore_def=ignore_def)
-                                        total_dmg += d
-                                        if c: any_crit = True
-                                    
-                                    battle_enemy["hp"] = max(0, battle_enemy["hp"] - total_dmg)
-                                    msg = f"{skill_name}! {total_dmg} 데미지!"
-                                    if hits > 1: msg = f"{skill_name}({hits}연타)! " + msg
-                                    effect_msgs.append(msg)
-                                    
-                                    if any_crit:
-                                        effect_msgs.append(random.choice(CRIT_SCRIPTS))
-                                    
-                                    # 공격 후 부가 효과
-                                    if skill_data.get("stun_chance", 0) > random.random():
-                                        enemy_battle_debuffs["기절"] = 1
-                                        effect_msgs.append(f"{battle_enemy['name']}이(가) 기절했습니다!")
-                                    
-                                    if "독무기" in player_battle_buffs:
-                                        enemy_battle_debuffs["중독"] = 3
-                                        effect_msgs.append("적을 중독시켰습니다!")
-                                    
-                                    if skill_name == "콜드 빔":
-                                        enemy_battle_debuffs["둔화"] = 2
-                                        effect_msgs.append("적이 얼어붙어 느려졌습니다!")
-
-                        # 용병 동시 공격 제거 (이제 용병이 직접행동함)
-                                # if dmg_rate > 0:
-                                #    handle_companion_attack()
-
-                                battle_messages = effect_msgs if effect_msgs else ["스킬 사용!"]
-                                battle_step = 1 # 결과 연출 단계로 이동
-                                battle_timer = now # 타이머 시작 (0.5초/1초 연출용)
-                                menu_nav_timer = now
-                            else:
-                                battle_messages = ["마나가 부족합니다!"]
-
-        elif battle_step == 1: # 내 메시지 연출
-            if now - battle_timer > 1500:
-                if battle_enemy["hp"] <= 0:
-                    battle_messages = [f"{battle_enemy['name']}을(를) 쓰러트렸다!"]
-                    battle_step = 3
-                    battle_timer = now
-                else:
-                    battle_messages = []
-                    battle_step = 30
-                    battle_companion_idx = 0
-                    battle_timer = now
-
-        elif battle_step == 30: # 동료 행동 메뉴
-            if not player_party or battle_companion_idx >= len(player_party):
-                battle_step = 40 # 적 턴 계산 단계로
-                battle_timer = now
-            else:
-                member = player_party[battle_companion_idx]
-                if member.get("hp", 0) <= 0:
-                    battle_companion_idx += 1
-                    continue # 루프 다음 프레임에서 재진입
-
-                m_data = COMPANION_DB.get(member["name"], {})
-                m_skills = m_data.get("skills", [])
-                
-                pygame.draw.rect(screen, BLACK, (50, HEIGHT - 180, WIDTH - 100, 170))
-                draw_text(f"[ {member['name']} ] 의 차례", 70, HEIGHT - 170, YELLOW, small=True)
-                
-                actions = ["기본 공격"] + m_skills
-                if 'battle_comp_select' not in globals(): globals()['battle_comp_select'] = 0
-                
-                for i, act in enumerate(actions):
-                    color = YELLOW if i == battle_comp_select else WHITE
-                    draw_text(act, 80, HEIGHT - 130 + i * 30, color)
-
-                if now - menu_nav_timer > 150:
-                    if keys[KEY_UP]:
-                        globals()['battle_comp_select'] = (battle_comp_select - 1) % len(actions)
-                        menu_nav_timer = now
-                    elif keys[KEY_DOWN]:
-                        globals()['battle_comp_select'] = (battle_comp_select + 1) % len(actions)
-                        menu_nav_timer = now
-
-                for event in events:
-                    if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                        sel_action = actions[battle_comp_select]
-                        atk_val = player_stats["atk"] * member["atk_rate"]
-                        
-                        if sel_action == "기본 공격":
-                            hd, hc = calculate_damage(atk_val, battle_enemy["def"], 10)
-                            battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                            battle_messages = [f"{member['name']}의 공격! {hd} 데미지!"]
-                            if hc: battle_messages.append(random.choice(CRIT_SCRIPTS))
-                        else:
-                            s_data = COMPANION_SKILL_DB.get(sel_action, {})
-                            s_type = s_data.get("type", "")
-                            s_power = s_data.get("power", 0)
-                            msg = f"{member['name']}의 {sel_action}!"
-                            sub_msg = ""
-
-                            if s_type == "taunt":
-                                globals()['battle_taunt_target'] = battle_companion_idx
-                                sub_msg = "적들의 주의를 자신에게 고정시켰습니다!"
-                            elif s_type == "heal":
-                                player_hp = min(player_max_hp, player_hp + s_power)
-                                add_damage_label(f"+{s_power}", 640, 330, GREEN) # Heal on player
-                                sub_msg = f"{player_name}님의 HP가 {s_power} 회복되었습니다."
-                            elif s_type == "mana":
-                                player_mana = min(player_max_mana, player_mana + s_power)
-                                add_damage_label(f"+{s_power}", 640, 330, BLUE) # Mana on player
-                                sub_msg = f"{player_name}님의 MP가 {s_power} 회복되었습니다."
-                            elif s_type == "damage":
-                                hd, _ = calculate_damage(atk_val * s_power, battle_enemy["def"], 20)
-                                battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                                add_damage_label(hd, 90, 80, RED) # Damage on enemy
-                                sub_msg = f"{hd}의 피해를 입혔습니다!"
-                            
-                            battle_messages = [msg]
-                            if sub_msg: battle_messages.append(sub_msg)
-                            analytics.log("growth", "companion_skill_usage")
-                        
-                        battle_step = 31 # 동료 메시지 연출 단계
-                        battle_timer = now
-
-        elif battle_step == 31: # 동료 메시지 연출
-            if now - battle_timer > 1500:
-                battle_messages = []
-                battle_companion_idx += 1
-                if battle_companion_idx >= len(player_party):
-                    battle_step = 40 # 모든 동료 종료 후 적 턴 준비
-                else:
-                    battle_step = 30 # 다음 동료
-                battle_timer = now
-
-        elif battle_step == 40: # 적 턴 계산 및 메시지 세팅
-            if battle_enemy["hp"] <= 0:
-                battle_step = 1 # 승리 체크하러
-                continue
-
-            # 적 턴 처리 전 상태 효과 확인
-            if "기절" in enemy_battle_debuffs:
-                battle_messages = [f"{battle_enemy['name']}은(는) 기절하여 움직일 수 없다!"]
-                enemy_battle_debuffs["기절"] -= 1
-                if enemy_battle_debuffs["기절"] <= 0: del enemy_battle_debuffs["기절"]
-                battle_step = 2 # 바로 연출 단계로
-                battle_timer = now
-                continue
-
-            boss_skill_used = False
-            # (기존 보스 스킬 로직 통합 생략 - 핵심 흐름 위주)
-            # 여기서는 편의상 일반 공격 로직만 먼저 정리
-            target = "player"
-            if battle_taunt_target != -1 and player_party[battle_taunt_target].get("hp",0) > 0:
-                target = f"comp{battle_taunt_target}"
-            else:
-                target_pool = ["player"]
-                for i, c in enumerate(player_party):
-                    if c.get("hp",0) > 0: target_pool.append(f"comp{i}")
-                target = random.choice(target_pool) if random.random() < 0.4 else "player"
-
-            enemy_atk = battle_enemy["atk"]
-            if target == "player":
-                damage, crit = calculate_damage(enemy_atk, player_stats["def"], battle_enemy["crit"])
-                player_hp = max(0, player_hp - damage)
-                add_damage_label(damage, 640, 330, RED if crit else WHITE, is_crit=crit) # Damage on player
-                battle_messages = ["위험합니다!"] if player_hp < player_max_hp * 0.2 else []
-                if crit: battle_messages.append("치명타를 입었습니다!")
-                
-                if player_hp <= 0:
-                    analytics.log("combat", "death_count")
-                    analytics.data["last_death_time"] = pygame.time.get_ticks()
-            else:
-                c_idx = int(target[-1])
-                comp = player_party[c_idx]
-                damage, crit = calculate_damage(enemy_atk, player_stats["def"]*0.7, battle_enemy["crit"])
-                comp["hp"] = max(0, comp["hp"] - damage)
-                battle_messages = [f"{battle_enemy['name']}의 공격! {comp['name']}에게 {damage} 데미지!"]
-                if comp["hp"] <= 0: battle_messages.append(f"{comp['name']}이(가) 쓰러졌습니다!")
-
-            battle_step = 2
-            battle_timer = now
-
-        elif battle_step == 2: # 적 메시지 연출 및 턴 종료
-            if now - battle_timer > 1500:
-                battle_messages = []
-                battle_turn_count += 1
-                analytics.log("combat", "total_turns")
-                battle_step = 0 # 다시 플레이어 메뉴로
-                battle_timer = now
-
-        elif battle_step == 20: # 아이템 선택 화면
-            pygame.draw.rect(screen, BLACK, (50, HEIGHT - 150, WIDTH - 100, 140))
-            draw_text(f"아이템 선택 (X: 취소)", 70, HEIGHT - 140, GREY, small=True)
-            
-            potions = [item for item in player_inventory if item["type"] == "potion"]
-            
-            if not potions:
-                draw_text("사용할 수 있는 포션이 없습니다.", 80, HEIGHT - 100, WHITE)
-            else:
-                # 목록 표시
-                for i, item in enumerate(potions):
-                    color = YELLOW if i == battle_item_select_idx else WHITE
-                    draw_text(f"{item['name']} x{item.get('count', 1)} ({item.get('desc', '')})", 80, HEIGHT - 110 + i * 30, color, small=True)
-            
-            if now - menu_nav_timer > 150:
-                if keys[KEY_UP] and potions:
-                    battle_item_select_idx = (battle_item_select_idx - 1) % len(potions)
-                    menu_nav_timer = now
-                elif keys[KEY_DOWN] and potions:
-                    battle_item_select_idx = (battle_item_select_idx + 1) % len(potions)
-                    menu_nav_timer = now
-            
-            for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == KEY_ACTION_2: # 취소
-                        battle_step = 0
-                        menu_nav_timer = now
-                    
-                    if event.key == KEY_ACTION_1 and potions: # 사용
-                        item = potions[battle_item_select_idx]
-                        eff = item.get("effect")
-                        val = item.get("value", 0)
-                        
-                        if eff == "hp" or eff == "hp_mana":
-                            # 포션 사용 성향 로깅
-                            hp_ratio = player_hp / player_max_hp
-                            if hp_ratio <= 0.2:
-                                analytics.log("growth", "potion_emergency")
-                            elif hp_ratio >= 0.7:
-                                analytics.log("growth", "potion_habitual")
-
-                        if eff == "hp":
-                            player_hp = min(player_max_hp, player_hp + val)
-                            battle_messages = [f"{item['name']}을(를) 사용하여 체력을 {val} 회복했습니다!"]
-                        elif eff == "mana":
-                            player_mana = min(player_max_mana, player_mana + val)
-                            battle_messages = [f"{item['name']}을(를) 사용하여 마나를 {val} 회복했습니다!"]
-                        elif eff == "hp_mana":
-                            player_hp = min(player_max_hp, player_hp + val)
-                            player_mana = min(player_max_mana, player_mana + val)
-                            battle_messages = [f"{item['name']}을(를) 사용하여 HP/MP를 {val} 회복했습니다!"]
-                        
-                        # 소모
-                        item['count'] -= 1
-                        if item['count'] <= 0:
-                            player_inventory.remove(item)
-                        
-                        battle_step = 30 # 동료 행동 단계로 이동
-                        battle_companion_idx = 0
-                        battle_timer = now
-                        menu_nav_timer = now
-
-        elif battle_step == 30: # 동료 행동 메뉴
-            if not player_party or battle_companion_idx >= len(player_party):
-                battle_step = 1 # 적 턴으로
-                battle_timer = now
-            else:
-                member = player_party[battle_companion_idx]
-                # 쓰러진 동료는 건너뜀
-                if member.get("hp", 1) <= 0:
-                    battle_companion_idx += 1
-                    continue
-                
-                m_data = COMPANION_DB.get(member["name"], {})
-                m_skills = m_data.get("skills", [])
-                
-                pygame.draw.rect(screen, BLACK, (50, HEIGHT - 180, WIDTH - 100, 170))
-                draw_text(f"[ {member['name']} ] 의 차례 (상태: {m_data['rarity']})", 70, HEIGHT - 170, YELLOW, small=True)
-                
-                # 행동 리스트 생성
-                actions = ["기본 공격"] + m_skills
-                if 'battle_comp_select' not in globals(): globals()['battle_comp_select'] = 0
-                
-                for i, act in enumerate(actions):
-                    color = YELLOW if i == battle_comp_select else WHITE
-                    draw_text(act, 80, HEIGHT - 130 + i * 30, color)
-
-                if now - menu_nav_timer > 150:
-                    if keys[KEY_UP]:
-                        globals()['battle_comp_select'] = (battle_comp_select - 1) % len(actions)
-                        menu_nav_timer = now
-                    elif keys[KEY_DOWN]:
-                        globals()['battle_comp_select'] = (battle_comp_select + 1) % len(actions)
-                        menu_nav_timer = now
-
-                for event in events:
-                    if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                        if now - menu_nav_timer > 200:
-                            sel_action = actions[battle_comp_select]
-                            atk_val = player_stats["atk"] * m_data.get("atk_rate", 0.5)
-                            
-                            if sel_action == "기본 공격":
-                                hd, hc = calculate_damage(atk_val, battle_enemy["def"], 10)
-                                battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                                battle_messages.append(f"{member['name']}의 공격! {hd} 데미지!")
-                            else:
-                                # COMPANION_SKILL_DB 참조
-                                s_data = COMPANION_SKILL_DB.get(sel_action, {})
-                                s_type = s_data.get("type", "")
-                                s_power = s_data.get("power", 0)
-                                msg = f"{member['name']}의 {sel_action}!"
-
-                                if s_type == "taunt":
-                                    globals()['battle_taunt_target'] = battle_companion_idx
-                                    msg += " 적들을 자신에게 고정시켰습니다!"
-                                elif s_type == "heal":
-                                    player_hp = min(player_max_hp, player_hp + s_power)
-                                    msg += f" {player_name}님의 HP가 {s_power} 회복되었습니다."
-                                elif s_type == "mana":
-                                    player_mana = min(player_max_mana, player_mana + s_power)
-                                    msg += f" {player_name}님의 MP가 {s_power} 회복되었습니다."
-                                elif s_type == "buff":
-                                    target_stat = s_data.get("target", "atk")
-                                    player_battle_buffs[target_stat if target_stat != "atk" else "공격력"] = s_power
-                                    msg += f" {player_name}님의 {target_stat} 능력이 강화되었습니다."
-                                elif s_type == "debuff":
-                                    target_stat = s_data.get("target", "")
-                                    if target_stat == "stun": enemy_battle_debuffs["기절"] = s_power
-                                    elif target_stat == "slow": enemy_battle_debuffs["둔화"] = s_power
-                                    elif target_stat == "def_down": battle_enemy["def"] = max(0, battle_enemy["def"] - s_power)
-                                    msg += " 적에게 상태이상을 부여했습니다."
-                                elif s_type == "damage":
-                                    hd, _ = calculate_damage(atk_val * s_power, battle_enemy["def"], 20)
-                                    battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                                    msg += f" {hd}의 피해를 입혔습니다!"
-                                elif s_type == "execute":
-                                    if battle_enemy["hp"] < battle_enemy["max_hp"] * s_power and not is_boss_battle:
-                                        battle_enemy["hp"] = 0
-                                        msg += " 적을 즉시 처형했습니다!"
-                                    else:
-                                        hd, _ = calculate_damage(atk_val * 2.0, battle_enemy["def"], 20)
-                                        battle_enemy["hp"] = max(0, battle_enemy["hp"] - hd)
-                                        msg += f" {hd}의 피해를 입혔습니다!"
-                                elif s_type == "gold":
-                                    stolen = random.randint(50, 200) * (player_level + 1)
-                                    player_gold += stolen
-                                    msg += f" {stolen}G를 획득했습니다!"
-                                elif s_type == "special_full_heal":
-                                    player_hp = player_max_hp
-                                    player_mana = player_max_mana
-                                    player_battle_buffs = {}
-                                    msg += " 기적으로 모든 상처를 치유했습니다!"
-                                elif s_type == "buff_all":
-                                    player_battle_buffs["공격력"] = s_power
-                                    player_battle_buffs["방어력"] = s_power
-                                    msg += " 전능한 기운으로 공방을 강화합니다."
-                                
-                                battle_messages.append(msg)
-                            
-                            battle_step = 31 # 동료 결과 메시지 대기 단계
-                            menu_nav_timer = now
-                            battle_timer = now
-
-        elif battle_step == 31: # 동료 행동 메시지 연출 대기
-            if now - battle_timer > 1500:
-                battle_companion_idx += 1
-                battle_messages = []
-                if battle_companion_idx >= len(player_party):
-                    battle_step = 2 # 적 턴으로
-                else:
-                    battle_step = 30 # 다음 동료
-                battle_timer = now
-                globals()['battle_comp_select'] = 0
-                menu_nav_timer = now
-
-        elif battle_step == 2:
-            can_skip = False
-            for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
-                    can_skip = True
-
-            if now - battle_timer > 1000 or can_skip:
-                # 턴 종료 처리 (독 데미지 등)
-                battle_turn_count += 1
-                
-                # 플레이어 독 데미지 추가
-                if "중독" in player_battle_buffs:
-                    p_dmg = int(player_max_hp * 0.05)
-                    player_hp = max(1, player_hp - p_dmg)
-                    battle_messages = [f"중독 상태! HP가 {p_dmg} 감소했습니다."]
-                    player_battle_buffs["중독"] -= 1
-                    if player_battle_buffs["중독"] <= 0: del player_battle_buffs["중독"]
-                    battle_timer = now
-                    battle_step = 11
-                    continue
-
-                if "중독" in enemy_battle_debuffs:
-                    poison_dmg = int(battle_enemy["max_hp"] * 0.05)
-                    battle_enemy["hp"] = max(1, battle_enemy["hp"] - poison_dmg) 
-                    battle_messages = [f"독 데미지! {battle_enemy['name']}의 HP가 {poison_dmg} 감소했습니다."]
-                    enemy_battle_debuffs["중독"] -= 1
-                    if enemy_battle_debuffs["중독"] <= 0: del enemy_battle_debuffs["중독"]
-                    battle_timer = now
-                
-                # 버프 기간 감소
-                for k in list(player_battle_buffs.keys()):
-                    if k == "중독": continue
-                    player_battle_buffs[k] -= 1
-                    if player_battle_buffs[k] <= 0: del player_battle_buffs[k]
-                
-                for k in list(enemy_battle_debuffs.keys()):
-                    if k not in ["중독", "기절", "둔화"]: 
-                        enemy_battle_debuffs[k] -= 1
-                        if enemy_battle_debuffs[k] <= 0: del enemy_battle_debuffs[k]
-
-                if player_hp <= 0:
-                    battle_step = BATTLE_STEP_DEATH
-                    battle_timer = now
-                    continue
-
-                if not battle_messages or (len(battle_messages)==1 and "공격!" in battle_messages[0]): 
-                    battle_messages = []
-                    battle_step = 0
-                else:
-                    battle_step = 11 
-                    battle_timer = now
-
-        elif battle_step == 11: # 턴 종료 메시지 출력 후 플레이어 턴
-            if now - battle_timer > BATTLE_DELAY:
-                battle_messages = []
-                battle_step = 0
-
-        elif battle_step == 3:
-            if now - battle_timer > BATTLE_DELAY:
-                # 경험치 및 보상 획득
-                exp_gain = battle_enemy["exp"]
-                gold_gain = int(exp_gain * 1.5) + random.randint(0, 5)
-                
-                player_exp += exp_gain
-                player_gold += gold_gain
-                
-                # 퀘스트 카운트
-                # print(f"DEBUG: Monster killed: {battle_enemy['name']}")
-                quest_manager.on_kill_monster(battle_enemy["name"])
-                
-                msg = f"승리! 경험치 {exp_gain}, {gold_gain}G 획득"
-                
-                # 전리품 획득 (30% 확률)
-                if random.random() < 0.3:
-                    loot_name = battle_enemy.get('loot_item', f"{battle_enemy['name']}의 전리품")
-                    loot_price = battle_enemy.get('loot_price', int(exp_gain * 2))
-                    add_item_to_inventory({"name": loot_name, "type": "misc", "price": loot_price, "desc": "상점에 판매 가능"})
-                    msg += f", {loot_name} 획득!"
-
-                # 희귀 전리품 획득 (5% 확률)
-                if random.random() < 0.05 and 'rare_loot' in battle_enemy:
-                    rare_name = battle_enemy['rare_loot']
-                    rare_price = battle_enemy.get('rare_price', 1000)
-                    add_item_to_inventory({"name": rare_name, "type": "misc", "price": rare_price, "desc": "매우 귀한 전리품"})
-                    msg += f", {rare_name} 획득!!!"
-
-                
-                battle_messages = [msg] # 메시지 설정
-                battle_step = 6 # 승리 대기 상태로 이동
-                battle_timer = now
-
-        elif battle_step == 6: # 승리 메시지 대기
-             if now - battle_timer > 1500: # 1.5초 대기
-                # 몬스터 제거 (전투 승리 시)
-                if 'battle_target_mob' in globals() and battle_target_mob in field_monsters:
-                    field_monsters.remove(battle_target_mob)
-                    # battle_target_mob 변수 제거는 밑에서 자동 처리 (여기서는 리스트에서만 제거)
-
-                # 마왕(최종 보스) 토벌 체크
-                if battle_enemy.get("is_last"):
-                    state = STATE_ENDING
-                # 레벨업 체크 (전투 승리 시)
-                elif trigger_level_up_check():
-                    state_before_levelup = STATE_FIELD
-                    state = STATE_LEVELUP
-                else:
-                    state = STATE_FIELD # 필드 복귀
-                    battle_cooldown_timer = now 
-
-                # 퀘스트 목표 달성 (QuestManager가 처리하므로 삭제)
-                # if quest_step == 1 ... (삭제됨)
-                
-                battle_messages = []
-        
-        elif battle_step == 5: # 도망 성공 대기
-            if now - battle_timer > 1000: # 1초 대기
-                analytics.log("combat", "flee_count")
-                state = STATE_FIELD
-                battle_cooldown_timer = now # 무적 시간 적용
-                battle_messages = []
-                # 도망 시 몬스터가 사라지지 않게 하려면 battle_target_mob 제거 로직을 건너뛰어야 함
-                # 하지만 여기서는 그냥 유지. 만약 사라지게 하려면 remove 호출.
-                # 보통 도망치면 몬스터는 그대로 있거나 (다시 싸우면 체력 리셋?), 아니면 사라짐.
-                # 편의상 제거하지 않음. 대신 전투 종료 시 battle_target_mob 관련 처리가 3번 단계 뒤에 있음.
-                # 5번 단계에서는 그냥 필드로 복귀.
-
-        elif battle_step == 4:
-            damage, _ = calculate_damage(battle_enemy["atk"], player_stats["def"], battle_enemy["crit"])
-            player_hp = max(0, player_hp - damage)
-            battle_messages = [f"{battle_enemy['name']}의 선공! {damage} 데미지!"]
-            battle_step = 2
-            battle_timer = now
-
-    # ----------------------------------------
-    # 레벨업 화면
-    # ----------------------------------------
+        battle_sys.update_battle(sys.modules[__name__], screen, events, keys, now)
     elif state == STATE_LEVELUP:
         screen.fill(BG_LEVELUP)
         draw_text(f"레벨업! 현재 레벨: {player_level}", WIDTH//2, HEIGHT//2 - 60, YELLOW, center=True)
@@ -2814,72 +2192,147 @@ while running:
             a_name = player_equipment["armor"]["name"] if player_equipment["armor"] else "없음"
             acc_name = player_equipment["accessory"]["name"] if player_equipment["accessory"] else "없음"
             
-            draw_text(f"무기: {w_name}", WIDTH//2 - 200, eq_y, WHITE, center=True, small=True)
-            draw_text(f"방어구: {a_name}", WIDTH//2, eq_y, WHITE, center=True, small=True)
-            draw_text(f"장신구: {acc_name}", WIDTH//2 + 200, eq_y, WHITE, center=True, small=True)
+            # 장착 정보 표시 및 선택 하이라이트
+            color_w = YELLOW if stat_inventory_idx == -1 else WHITE
+            color_a = YELLOW if stat_inventory_idx == -2 else WHITE
+            color_acc = YELLOW if stat_inventory_idx == -3 else WHITE
+            
+            draw_text(f"무기: {w_name}", WIDTH//2 - 200, eq_y, color_w, center=True, small=True)
+            draw_text(f"방어구: {a_name}", WIDTH//2, eq_y, color_a, center=True, small=True)
+            draw_text(f"장신구: {acc_name}", WIDTH//2 + 200, eq_y, color_acc, center=True, small=True)
             draw_text(f"소지금: {player_gold}G", WIDTH//2, eq_y + 30, YELLOW, center=True, small=True)
             
             inv_start_y = 180
             if not player_inventory:
                 draw_text("비어있음", WIDTH//2, inv_start_y + 40, GREY, center=True)
             else:
-                for i, item in enumerate(player_inventory):
+                # 인벤토리 스크롤 및 표시 로직 개선
+                start_idx = max(0, stat_inventory_idx - 5)
+                end_idx = min(len(player_inventory), start_idx + 10)
+                
+                for i in range(start_idx, end_idx):
+                    item = player_inventory[i]
                     color = YELLOW if i == stat_inventory_idx else WHITE
-                    draw_text(f"{item['name']} x{item.get('count', 1)}", WIDTH//2, inv_start_y + i * 30, color, center=True, small=True)
+                    draw_text(f"{item['name']} x{item.get('count', 1)}", WIDTH//2, inv_start_y + (i - start_idx) * 30, color, center=True, small=True)
+            
+            # 인벤토리 아이템 정보 표시
+            desc_raw = ""
+            if stat_inventory_idx >= 0 and player_inventory:
+                sel_item = player_inventory[stat_inventory_idx]
+                desc_raw = f"[{sel_item['name']}]\n{sel_item.get('desc', '설명이 없습니다.')}\n가격: {sel_item.get('price', 0)}G"
+                if "type" in sel_item:
+                    desc_raw += f"\n종류: {sel_item.get('type','기타')}"
+                if "min_lv" in sel_item and sel_item['min_lv'] > 1:
+                    desc_raw += f"\n최소 레벨: {sel_item['min_lv']}"
+            elif stat_inventory_idx < 0:
+                # 장비 슬롯 정보 표시
+                slots = { -1: "weapon", -2: "armor", -3: "accessory" }
+                slot_name = slots[stat_inventory_idx]
+                item = player_equipment[slot_name]
+                if item:
+                    desc_raw = f"[{item['name']}] (장착 중)\n{item.get('desc', '설명이 없습니다.')}"
+                    for s_key in STAT_ORDER:
+                        if s_key in item and item[s_key] != 0:
+                            desc_raw += f"\n{STAT_CONFIG[s_key]['label']}: +{item[s_key]}"
+                    desc_raw += "\n\n[Z] 해제"
+                else:
+                    desc_raw = "비어있는 슬롯입니다."
+            else:
+                desc_raw = "인벤토리가 비어있습니다."
+                
+            if desc_raw:
+                # 개선된 설명 그리기 (Wrap Text 사용)
+                pygame.draw.rect(screen, (30, 30, 30), (50, 200, 250, 300))
+                pygame.draw.rect(screen, WHITE, (50, 200, 250, 300), 2)
+                
+                wrapped_desc = wrap_text(desc_raw, font_small, 230)
+                for i, line in enumerate(wrapped_desc):
+                    draw_text(line, 60, 210 + i * 20, WHITE, small=True)
 
             if now - menu_nav_timer > 150:
                 if keys[KEY_UP]:
-                    stat_inventory_idx = max(0, stat_inventory_idx - 1)
+                    stat_inventory_idx -= 1
+                    max_inv = len(player_inventory) if player_inventory else 0
+                    if stat_inventory_idx < -3: 
+                        stat_inventory_idx = max_inv - 1 if max_inv > 0 else -1
                     menu_nav_timer = now
                 elif keys[KEY_DOWN]:
-                    if player_inventory:
-                        stat_inventory_idx = min(len(player_inventory) - 1, stat_inventory_idx + 1)
+                    stat_inventory_idx += 1
+                    max_inv = len(player_inventory) if player_inventory else 0
+                    if stat_inventory_idx >= max_inv:
+                        stat_inventory_idx = -3 if max_inv > 0 or stat_inventory_idx > 0 else 0 
+                        # 무한 로프 방지 및 조정
+                        if stat_inventory_idx > 0 and max_inv == 0: stat_inventory_idx = -3
                     menu_nav_timer = now
             
             for event in events:
-                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1 and player_inventory:
-                    if stat_inventory_idx >= len(player_inventory):
-                        stat_inventory_idx = max(0, len(player_inventory) - 1)
-                    
-                    item = player_inventory[stat_inventory_idx]
-                    if item["type"] in ["weapon", "armor", "accessory"]:
-                        if "job" in item and item["job"] != player_job and player_job != "초보자":
-                             pass # 직업 제한
-                        else:
-                            eq_type = item["type"]
-                            current = player_equipment[eq_type]
-                            
-                            # 기존 장비 해제 (스탯 감소)
-                            if current:
-                                for s_key in STAT_ORDER:
-                                    if s_key in current:
-                                        player_stats[s_key] -= current[s_key]
-                                add_item_to_inventory(current)
-                            
-                            # 새 장비 장착 (스탯 증가)
-                            player_equipment[eq_type] = item.copy()
-                            player_equipment[eq_type]['count'] = 1
+                if event.type == pygame.KEYDOWN and event.key == KEY_ACTION_1:
+                    if stat_inventory_idx < 0:
+                        # 장비 해제 로직
+                        slots = { -1: "weapon", -2: "armor", -3: "accessory" }
+                        eq_type = slots[stat_inventory_idx]
+                        current = player_equipment[eq_type]
+                        if current:
                             for s_key in STAT_ORDER:
-                                if s_key in item:
-                                    player_stats[s_key] += item[s_key]
+                                if s_key in current:
+                                    player_stats[s_key] -= current[s_key]
+                            add_item_to_inventory(current)
+                            player_equipment[eq_type] = None
                             
-                            # HP/MP 최대치 업데이트
                             player_max_hp = player_stats["hp"]
+                            player_hp = min(player_hp, player_max_hp)
                             player_max_mana = player_stats["mana"]
-                            
+                            player_mana = min(player_mana, player_max_mana)
+                        menu_nav_timer = now
+                    elif player_inventory:
+                        if stat_inventory_idx >= len(player_inventory):
+                            stat_inventory_idx = max(0, len(player_inventory) - 1)
+                        
+                        item = player_inventory[stat_inventory_idx]
+                        if item["type"] in ["weapon", "armor", "accessory"]:
+                            if "job" in item and item["job"] != player_job and player_job != "초보자":
+                                 pass # 직업 제한
+                            else:
+                                eq_type = item["type"]
+                                current = player_equipment[eq_type]
+                                
+                                # 기존 장비 해제 (스탯 감소)
+                                if current:
+                                    for s_key in STAT_ORDER:
+                                        if s_key in current:
+                                            player_stats[s_key] -= current[s_key]
+                                    add_item_to_inventory(current)
+                                
+                                # 같은 아이템을 장착 중이었으면 해제만 하고 끝 (장착 토글)
+                                if current and current['name'] == item['name']:
+                                    player_equipment[eq_type] = None
+                                else:
+                                    # 새 장비 장착 (스탯 증가)
+                                    player_equipment[eq_type] = item.copy()
+                                    player_equipment[eq_type]['count'] = 1
+                                    for s_key in STAT_ORDER:
+                                        if s_key in item:
+                                            player_stats[s_key] += item[s_key]
+                                    
+                                    item['count'] -= 1
+                                    if item['count'] <= 0: 
+                                        player_inventory.pop(stat_inventory_idx)
+                                        stat_inventory_idx = max(0, stat_inventory_idx - 1)
+                                        
+                                # HP/MP 최대치 업데이트 (공통)
+                                player_max_hp = player_stats["hp"]
+                                player_hp = min(player_hp, player_max_hp)
+                                player_max_mana = player_stats["mana"]
+                                player_mana = min(player_mana, player_max_mana)
+                                menu_nav_timer = now
+                        elif item["type"] == "potion":
+                            # 포션 사용
+                            if item.get("effect") == "hp": player_hp = min(player_max_hp, player_hp + item.get("value", 0))
                             item['count'] -= 1
                             if item['count'] <= 0: 
                                 player_inventory.pop(stat_inventory_idx)
                                 stat_inventory_idx = max(0, stat_inventory_idx - 1)
                             menu_nav_timer = now
-                    elif item["type"] == "potion":
-                        # 포션 사용
-                        if item.get("effect") == "hp": player_hp = min(player_max_hp, player_hp + item.get("value", 0))
-                        item['count'] -= 1
-                        if item['count'] <= 0: 
-                            player_inventory.pop(stat_inventory_idx)
-                            stat_inventory_idx = max(0, stat_inventory_idx - 1)
-                        menu_nav_timer = now
 
         elif stat_page == 2:
             # 스킬 페이지
@@ -2909,17 +2362,19 @@ while running:
 
             for event in events:
                 if event.type == pygame.KEYDOWN:
-                    if event.key == KEY_ACTION_1 and skill_points > 0:
-                        skill_points -= 1
-                        skill_levels[sel_skill] = lv + 1
-                        menu_nav_timer = now
-                    elif event.key == pygame.K_UP:
+                    if event.key == pygame.K_UP:
                         globals()['skill_selected_idx'] = (skill_selected_idx - 1) % len(my_skills)
-                        menu_nav_timer = now
                     elif event.key == pygame.K_DOWN:
                         globals()['skill_selected_idx'] = (skill_selected_idx + 1) % len(my_skills)
-                        menu_nav_timer = now
-
+                    elif (event.key == pygame.K_RIGHT or event.key == KEY_ACTION_1) and skill_points > 0:
+                        # 스킬 포인트 투자
+                        sel_skill = my_skills[skill_selected_idx]
+                        curr_lv = skill_levels.get(sel_skill, 1)
+                        if curr_lv < 10: # 최대 레벨 제한
+                             skill_levels[sel_skill] = curr_lv + 1
+                             skill_points -= 1
+                             # 첫 습득 로깅
+                             if curr_lv == 0: analytics.log("growth", "skills_learned")
     elif state == STATE_RECRUIT:
         screen.fill(BG_SELECT)
         draw_text("용병 모집 (N/R/SR/SSR)", WIDTH//2, 55, YELLOW, center=True)
